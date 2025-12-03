@@ -1,60 +1,71 @@
-# Aninode Design System (MVP)
+# Aninode Design System
 
 A high-fidelity, node-based UI library designed for next-generation animation engines. This system features an "OLED Black" aesthetic, infinite canvas navigation, and a robust signal flow visualization engine.
 
-## 🌟 Features
+## Key Features
 
-### 🎨 Visuals
-- **OLED Aesthetic**: Pure black backgrounds, subtle borders, and neon accents.
-- **Signal Flow Highlighting**: Selecting a node lights up the entire upstream and downstream signal chain in a unique "Branch Color" (Cyan, Magenta, Lime, etc.).
-- **Real-time Visualization**: Oscillator nodes feature live, 60fps canvas-based waveform rendering.
-- **Inverse Scaling**: Wires and borders maintain a consistent "hairline" thickness regardless of zoom level.
+### Core Architecture
 
-### 🕸️ Wiring & Nodes
-- **5 Cable Types**:
-  - **Bezier**: Standard smooth curve.
-  - **Straight (Telepathic)**: A straight line ending in an arrow that points to the target node's center (useful for wireless/remote data).
-  - **Step**: Circuit-board style orthogonal routing.
-  - **Double**: Thick dual-line for heavy data streams.
-  - **Dotted**: For auxiliary or control signals.
-- **Bi-directional Wiring**: Drag from Output→Input or Input→Output.
-- **Smart Ports**: Context menus for precise disconnection.
+- **Node-Based Workflow**: Modular components for procedural generation and signal processing.
+- **Infinite Canvas**: Physics-based panning and zooming with infinite workspace.
+- **Telepathic Connections**: Property-to-property binding system allowing values to be transmitted wirelessly between nodes.
+- **Signal Flow Visualization**: Dynamic highlighting of upstream and downstream signal chains.
 
-### 🖱️ Interaction
-- **Infinite Canvas**: Pan and Zoom with physics-based smooth scrolling.
-- **Drag & Drop**: Snapping to grid (20px) for alignment.
-- **Context Menus**: Right-click canvas to add nodes; Right-click ports to manage connections.
+### Wiring & Connections
 
-## 🎮 Controls
+- **Smart Connection System**: Bi-directional wiring (Input-to-Output or Output-to-Input) with automatic compatibility filtering.
+- **Cable Types**:
+  - **Bezier**: Standard smooth curve for continuous signals.
+  - **Straight (Telepathic)**: Direct visual link for bound properties.
+  - **Step**: Orthogonal routing for logic paths.
+  - **Double**: Dual-strand rendering for complex data types, utilizing a gap-masking technique for visual clarity.
+  - **Dotted**: Auxiliary control signals.
+- **Connection Logic**:
+  - **One-to-One Restriction**: Prevents duplicate connections between the same ports.
+  - **Automatic Type Conversion**: Boolean (0/1) and normalized decimal (0.0-1.0) values are automatically converted to percentages (0-100%) when connected to compatible fields (e.g., Sliders, Transform Scale).
 
-| Action | Control |
-| :--- | :--- |
-| **Pan Canvas** | Left Click Drag (Background) **OR** Shift + Scroll |
-| **Zoom** | Mouse Wheel Scroll |
-| **Select Node** | Left Click |
-| **Add Node** | "Add Node" Button **OR** Context Menu (Right-click background) |
-| **Duplicate Node** | `Ctrl` + Drag Node **OR** `Alt` + Drag Node |
-| **Connect** | Drag from any Port to another Port |
-| **Delete Selection** | `Delete` or `Backspace` key |
-| **Disconnect Wire** | `Alt` + Click Wire **OR** Right-click Port > Uncheck |
-| **Cancel Selection** | `Esc` key |
+### Interaction & Controls
 
-## 🛠️ Architecture
+- **Multi-Selection**: Select multiple nodes via `Shift + Click`.
+- **Clipboard Operations**: Copy (`Ctrl + C`) and Paste (`Ctrl + V`) nodes preserving configuration (excluding connections).
+- **History Management**: Robust Undo (`Ctrl + Z`) and Redo (`Ctrl + Y`) system for all canvas operations.
+- **Focus Controls**: Instantly frame selected nodes (`F`) or the entire graph (`Shift + F`).
+- **Quick Access**: Rapidly add nodes via the Node Picker (`Shift + Tab`).
 
-- **React 19**: Core framework.
-- **Tailwind CSS**: Styling engine.
-- **SVG**: High-performance wire rendering layer.
-- **HTML Canvas**: Waveform visualization.
-- **Lucide React**: Vector iconography.
+### Visuals & Aesthetics
 
-### Node Coordinate System
-- Nodes are 256px wide.
-- **Input Port**: -24px relative to node left.
-- **Output Port**: -24px relative to node right.
-- **Grid Snap**: 20px.
+- **OLED Theme**: Deep black backgrounds with high-contrast neon accents.
+- **Adaptive Grid**: Context-aware grid system (Dots/Lines/Crosshair) with optimized visibility for both Light and Dark modes.
+- **Inverse Scaling**: UI elements maintain consistent stroke weights regardless of zoom level.
+- **Real-time Visualization**: 60fps canvas-based rendering for Oscillator waveforms.
 
-## 🚀 Getting Started
+## Keyboard Shortcuts
+
+| Action               | Shortcut               |
+| :------------------- | :--------------------- |
+| **Pan Canvas**       | Left Drag (Background) |
+| **Zoom**             | Mouse Wheel            |
+| **Add to Selection** | `Shift` + Click        |
+| **Node Picker**      | `Shift` + `Tab`        |
+| **Undo**             | `Ctrl` + `Z`           |
+| **Redo**             | `Ctrl` + `Y`           |
+| **Copy**             | `Ctrl` + `C`           |
+| **Paste**            | `Ctrl` + `V`           |
+| **Focus Selected**   | `F`                    |
+| **Focus All**        | `Shift` + `F`          |
+| **Duplicate**        | `Alt` + Drag           |
+| **Delete**           | `Delete` / `Backspace` |
+| **Disconnect Wire**  | `Alt` + Click Wire     |
+
+## Technical Stack
+
+- **Framework**: React 19
+- **Styling**: Tailwind CSS
+- **Icons**: Lucide React
+- **Rendering**: Hybrid SVG (wires) and HTML5 Canvas (visualizers)
+
+## Getting Started
 
 1. **Install dependencies**: `npm install`
-2. **Run dev server**: `npm start`
+2. **Run dev server**: `npm run dev`
 3. **Build**: `npm run build`
