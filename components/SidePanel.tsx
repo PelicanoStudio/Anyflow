@@ -51,7 +51,7 @@ export const SidePanel: React.FC<SidePanelProps> = ({ selectedNode, onClose, onU
 
   return (
     <div 
-        className={`fixed right-4 top-4 bottom-4 w-80 backdrop-blur-xl border rounded-2xl shadow-2xl z-50 flex flex-col overflow-hidden transition-all duration-300 ${panelClass}`} 
+        className={`fixed right-4 top-4 bottom-4 w-80 backdrop-blur-xl border rounded-2xl shadow-2xl z-[60] flex flex-col overflow-hidden transition-all duration-300 ${panelClass}`} 
         onMouseDown={(e) => e.stopPropagation()}
         onMouseUp={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onContextMenu(null); }}

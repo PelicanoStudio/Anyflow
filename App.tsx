@@ -1,19 +1,17 @@
-
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { NodeData, Connection, NodeType, ConnectionType } from './types';
+import { NodeData, Connection, NodeType, ConnectionType, GridType } from './types';
 import { BaseNode, getTypeLabel } from './components/nodes/BaseNode';
 import { SidePanel } from './components/SidePanel';
-import { Visualizer } from './components/nodes/Visualizer';
-import { 
-  Plus, Settings, Command, Monitor, Trash2, X, MousePointer2, ZoomIn, ZoomOut, Move, Unplug, 
-  CheckSquare, Square, Sun, Moon, Grid3X3, Grid, Box, Sliders, Hash, ToggleLeft, Copy, 
-  Link as LinkIcon, Info, Unlink, Maximize, Scan, Undo, Redo, Clipboard
-} from 'lucide-react';
-
-const NEON_PALETTE = ['#00FFFF', '#FF00FF', '#00FF00', '#FFFF00', '#FF3333', '#FFA500', '#8A2BE2'];
-const SNAP_SIZE = 20;
-
-type GridType = 'DOTS' | 'LINES' | 'CROSS';
+import { isMobileOrTablet } from './utils/deviceDetection';
+import { NEON_PALETTE, SNAP_SIZE } from './constants';
+import { getRayBoxIntersection } from './utils/geometry';
+import { ShortcutsPanel } from './components/ui/ShortcutsPanel';
+import { Header } from './components/ui/Header';
+import { NodePicker } from './components/ui/NodePicker';
+import { CanvasBackground } from './components/canvas/CanvasBackground';
+import { ConnectionLine } from './components/canvas/ConnectionLine';
+import { NodeContent } from './components/nodes/NodeContent';
+import { usePinchZoom } from './hooks/usePinchZoom';
 
 // History State Interface
 interface HistoryState {
@@ -68,6 +66,9 @@ export default function App() {
   const [propertyTeleportBuffer, setPropertyTeleportBuffer] = useState<{ nodeId: string, propKey: string } | null>(null);
   const [propertyContextMenu, setPropertyContextMenu] = useState<{ x: number, y: number, propKey: string, nodeId: string } | null>(null);
 
+  // Hooks
+  usePinchZoom(viewport, setViewport, containerRef);
+
   // Update HTML class for Tailwind dark mode
   useEffect(() => {
     if (isDarkMode) document.documentElement.classList.add('dark');
@@ -75,7 +76,7 @@ export default function App() {
   }, [isDarkMode]);
 
   // --- HISTORY MANAGEMENT ---
-  const pushHistory = (newNodes: NodeData[], newConnections: Connection[]) => {
+  const pushHistory = (newNodes: NodeData[] = nodes, newConnections: Connection[] = connections) => {
       const newHistory = history.slice(0, historyIndex + 1);
       newHistory.push({ nodes: newNodes, connections: newConnections });
       setHistory(newHistory);
@@ -101,32 +102,6 @@ export default function App() {
           setHistoryIndex(historyIndex + 1);
           setSelectedIds(new Set());
       }
-  };
-
-  // --- MATH UTILS ---
-  const getRayBoxIntersection = (x1: number, y1: number, x2: number, y2: number, boxW: number, boxH: number, margin: number) => {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-    const slope = dy / dx;
-    const cx = x2;
-    const cy = y2;
-    const hw = boxW / 2;
-    const hh = boxH / 2;
-    let ix, iy;
-
-    if (Math.abs(dx) > 0.001) {
-        const signX = dx > 0 ? 1 : -1;
-        ix = signX * hw;
-        iy = slope * ix;
-        if (Math.abs(iy) <= hh) return { x: cx - (ix + signX * margin), y: cy - iy };
-    }
-    if (Math.abs(dy) > 0.001) {
-        const signY = dy > 0 ? 1 : -1;
-        iy = signY * hh;
-        ix = iy / slope;
-        if (Math.abs(ix) <= hw) return { x: cx - ix, y: cy - (iy + signY * margin) };
-    }
-    return { x: cx, y: cy };
   };
 
   const screenToWorld = useCallback((screenX: number, screenY: number) => {
@@ -386,11 +361,39 @@ export default function App() {
           return;
       }
 
-      if (e.shiftKey) {
-          const worldPos = screenToWorld(e.clientX, e.clientY);
-          setTempWire({ startId: id, startType: type, mouseX: worldPos.x, mouseY: worldPos.y, isHot: true });
-          return;
+      // Ctrl+Alt+Drag from Output -> Clone Node
+      if ((e.ctrlKey || e.metaKey) && e.altKey && type === 'output') {
+          const sourceNode = nodes.find(n => n.id === id);
+          if (sourceNode) {
+              const newNode = addNode(sourceNode.type, sourceNode.position.x + 50, sourceNode.position.y + 50);
+              const newConns = [...connections, { 
+                  id: `c_${Date.now()}`, 
+                  source: id, 
+                  target: newNode.id, 
+                  type: ConnectionType.BEZIER 
+              }];
+              setConnections(newConns);
+              pushHistory(nodes, newConns);
+              
+              // Start dragging the new node immediately
+              const startPositions: Record<string, {x: number, y: number}> = {};
+              startPositions[newNode.id] = { x: newNode.position.x, y: newNode.position.y };
+              setDragState({ 
+                  nodeIds: [newNode.id], 
+                  startPositions, 
+                  mouseStartX: e.clientX, 
+                  mouseStartY: e.clientY 
+              });
+              setSelectedIds(new Set([newNode.id]));
+              return;
+          }
       }
+
+    if (e.shiftKey || isMobileOrTablet()) {
+        const worldPos = screenToWorld(e.clientX, e.clientY);
+        setTempWire({ startId: id, startType: type, mouseX: worldPos.x, mouseY: worldPos.y, isHot: true });
+        return;
+    }
       const worldPos = screenToWorld(e.clientX, e.clientY);
       setTempWire({ startId: id, startType: type, mouseX: worldPos.x, mouseY: worldPos.y, isHot: false });
   };
@@ -499,48 +502,6 @@ export default function App() {
       }
   }, [nodes]);
 
-  const renderNodeContent = (node: NodeData) => {
-      const updateConfig = (key: string, val: any) => {
-          const newNodes = nodes.map(n => n.id === node.id ? { ...n, config: { ...n.config, [key]: val } } : n);
-          setNodes(newNodes);
-          // Don't push history on every keystroke/slide, maybe debounce? For now, just direct update.
-          // Ideally we push history on blur or mouse up.
-      };
-      switch(node.type) {
-          case NodeType.OSCILLATOR:
-              return <Visualizer type="sine" frequency={node.config.frequency || 1} amplitude={node.config.amplitude || 1} active={true} isDarkMode={isDarkMode} />;
-          case NodeType.PICKER:
-              return (
-                  <div className="w-full aspect-video bg-neutral-900 rounded-lg overflow-hidden relative group">
-                       {node.config.src ? <img src={node.config.src} alt="Asset" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-neutral-700">No Asset</div>}
-                  </div>
-              );
-          case NodeType.SLIDER:
-              return (
-                  <div className="pt-2">
-                      <div className="flex justify-between text-xs font-mono mb-1 opacity-70">
-                          <span>{node.config.min || 0}</span><span className="text-accent-red font-bold">{node.config.value}</span><span>{node.config.max || 100}</span>
-                      </div>
-                      <input type="range" min={node.config.min} max={node.config.max} step={node.config.step} value={node.config.value} onChange={(e) => updateConfig('value', parseFloat(e.target.value))} onMouseUp={() => pushHistory(nodes, connections)} className="w-full h-1 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-accent-red" onMouseDown={(e) => e.stopPropagation()} />
-                  </div>
-              );
-          case NodeType.NUMBER:
-              return (
-                  <div className="pt-1"><input type="number" value={node.config.value} onChange={(e) => updateConfig('value', parseFloat(e.target.value))} onBlur={() => pushHistory(nodes, connections)} className={`w-full bg-transparent border-b ${isDarkMode ? 'border-white/20 text-white' : 'border-black/20 text-black'} font-mono text-lg focus:outline-none focus:border-accent-red transition-colors`} onMouseDown={(e) => e.stopPropagation()} /></div>
-              );
-          case NodeType.BOOLEAN:
-              return (
-                  <div className="flex items-center justify-between pt-1" onMouseDown={(e) => e.stopPropagation()}>
-                      <span className="text-xs font-mono opacity-50">{node.config.enabled ? 'ON' : 'OFF'}</span>
-                      <button onClick={() => { updateConfig('enabled', !node.config.enabled); pushHistory(nodes, connections); }} className={`w-10 h-5 rounded-full relative transition-colors ${node.config.enabled ? 'bg-accent-red' : (isDarkMode ? 'bg-neutral-700' : 'bg-neutral-300')}`}><div className={`absolute top-1 w-3 h-3 rounded-full bg-white transition-all ${node.config.enabled ? 'left-6' : 'left-1'}`} /></button>
-                  </div>
-              );
-          case NodeType.CLONE:
-              return <div className="h-8 flex items-center justify-center gap-2 opacity-50"><Copy size={12} /><span className="text-xs font-mono">Linked Instance</span></div>;
-          default: return <div className="h-8 flex items-center justify-center text-xs opacity-30 font-mono uppercase">{node.type}</div>;
-      }
-  };
-
   return (
     <div 
       id="canvas-bg"
@@ -622,7 +583,7 @@ export default function App() {
       }}
     >
         {/* GRID BACKGROUND */}
-        <div className="absolute inset-0 pointer-events-none opacity-20" style={{ backgroundPosition: `${viewport.x}px ${viewport.y}px`, backgroundSize: `${SNAP_SIZE * viewport.zoom}px ${SNAP_SIZE * viewport.zoom}px`, backgroundImage: gridType === 'DOTS' ? `radial-gradient(${isDarkMode ? '#444' : '#999'} 2px, transparent 2px)` : `linear-gradient(${isDarkMode ? '#333' : '#BBB'} 1.5px, transparent 1.5px), linear-gradient(90deg, ${isDarkMode ? '#333' : '#BBB'} 1.5px, transparent 1.5px)` }} />
+        <CanvasBackground viewport={viewport} isDarkMode={isDarkMode} gridType={gridType} />
 
       <div ref={containerRef} className="absolute inset-0 z-10 origin-top-left pointer-events-none" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}>
         {/* WIRES */}
@@ -630,57 +591,20 @@ export default function App() {
             <defs>
                  <marker id="arrow-head" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill={isDarkMode ? "#666" : "#999"} /></marker>
             </defs>
-            {connections.map(conn => {
-                const s = getNodePosition(conn.source);
-                const t = getNodePosition(conn.target);
-                let d = "";
-                let strokeWidth = Math.max(1.5, Math.min(6, 2 / viewport.zoom));
-                let strokeDash = "none";
-                let markerEnd = "none";
-                let strokeColor = isDarkMode ? "#666" : "#999";
-
-                // Telepathic Arrow
-                if (conn.type === ConnectionType.STRAIGHT) {
-                    const sw = 256; const sh = 100; const scx = s.x + sw/2; const scy = s.y + sh/2; const tcx = t.x + sw/2; const tcy = t.y + sh/2;
-                    const end = getRayBoxIntersection(scx, scy, tcx, tcy, 256, 128, 5 / viewport.zoom);
-                    const start = getRayBoxIntersection(tcx, tcy, scx, scy, 256, 128, 5 / viewport.zoom);
-                    d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
-                    strokeWidth = Math.max(1, 1.5 / viewport.zoom);
-                    strokeDash = `${5/viewport.zoom} ${5/viewport.zoom}`;
-                    markerEnd = "url(#arrow-head)";
-                
-                // Orthogonal Step
-                } else if (conn.type === ConnectionType.STEP) {
-                    const sx = s.x + 272; const sy = s.y + 40; const tx = t.x - 16; const ty = t.y + 40;
-                    const midX = sx + (tx - sx) / 2;
-                    d = `M ${sx} ${sy} L ${midX} ${sy} L ${midX} ${ty} L ${tx} ${ty}`;
-                
-                // Dotted Bezier
-                } else if (conn.type === ConnectionType.DOTTED) {
-                    d = `M ${s.x + 272} ${s.y + 40} C ${s.x + 272 + 100} ${s.y + 40} ${t.x - 16 - 100} ${t.y + 40} ${t.x - 16} ${t.y + 40}`;
-                    strokeDash = `${10/viewport.zoom} ${10/viewport.zoom}`;
-                
-                // Default & Double
-                } else {
-                    d = `M ${s.x + 272} ${s.y + 40} C ${s.x + 272 + 100} ${s.y + 40} ${t.x - 16 - 100} ${t.y + 40} ${t.x - 16} ${t.y + 40}`;
-                }
-
-                const isDouble = conn.type === ConnectionType.DOUBLE;
-
-                return (
-                    <g key={conn.id}>
-                        <path d={d} stroke="transparent" strokeWidth={15 / viewport.zoom} fill="none" className="pointer-events-auto cursor-pointer" onClick={(e) => { if(e.altKey) { setConnections(prev => prev.filter(c => c.id !== conn.id)); pushHistory(nodes, connections.filter(c => c.id !== conn.id)); } }} />
-                        {isDouble ? (
-                            <>
-                                <path d={d} stroke={strokeColor} strokeWidth={strokeWidth * 3} fill="none" strokeLinecap="round" className="pointer-events-none" />
-                                <path d={d} stroke={isDarkMode ? '#000000' : '#F5F5F5'} strokeWidth={strokeWidth} fill="none" strokeLinecap="round" className="pointer-events-none" />
-                            </>
-                        ) : (
-                            <path d={d} stroke={strokeColor} strokeWidth={strokeWidth} fill="none" strokeDasharray={strokeDash} markerEnd={markerEnd} strokeLinecap="round" className="pointer-events-none" />
-                        )}
-                    </g>
-                )
-            })}
+            {connections.map(conn => (
+                <ConnectionLine 
+                    key={conn.id}
+                    connection={conn}
+                    sourceNode={nodes.find(n => n.id === conn.source)}
+                    targetNode={nodes.find(n => n.id === conn.target)}
+                    viewport={viewport}
+                    isDarkMode={isDarkMode}
+                    onDelete={(id) => {
+                        setConnections(prev => prev.filter(c => c.id !== id));
+                        pushHistory(nodes, connections.filter(c => c.id !== id));
+                    }}
+                />
+            ))}
              {tempWire && (
                 <path d={`M ${tempWire.startType === 'output' ? getNodePosition(tempWire.startId).x + 272 : getNodePosition(tempWire.startId).x - 16} ${getNodePosition(tempWire.startId).y + 40} L ${tempWire.mouseX} ${tempWire.mouseY}`} stroke={isDarkMode ? "#666" : "#999"} strokeWidth={2 / viewport.zoom} strokeDasharray="5 5" fill="none" />
             )}
@@ -706,12 +630,6 @@ export default function App() {
                 onPortUp={handlePortUp}
                 onPortContextMenu={(id, type, e) => { setMenuData({ nodeId: id, type, x: e.clientX, y: e.clientY }); setActiveMenu('DISCONNECT'); }}
                 onPortDoubleClick={(id, type, e) => { 
-                    // FILTER LOGIC
-                    // If Output -> Show only Inputs (exclude Picker, Oscillator, Slider, Number, Boolean)
-                    // If Input -> Show only Outputs (exclude Output)
-                    // Actually, let's just show all but filter visually or logically?
-                    // User asked: "offer only nodes that have input/output"
-                    // We'll pass a filterType to the menu
                     setMenuData({ nodeId: id, type, x: e.clientX, y: e.clientY }); 
                     setActiveMenu('PORT'); 
                 }}
@@ -783,68 +701,61 @@ export default function App() {
                     }
                 }}
             >
-                {renderNodeContent(node)}
+                <NodeContent 
+                    node={node} 
+                    isDarkMode={isDarkMode} 
+                    updateConfig={(key, val) => {
+                        const newNodes = nodes.map(n => n.id === node.id ? { ...n, config: { ...n.config, [key]: val } } : n);
+                        setNodes(newNodes);
+                    }}
+                    pushHistory={() => pushHistory(nodes, connections)}
+                />
             </BaseNode>
         ))}
       </div>
       
+      {/* SIDE PANEL */}
+      <SidePanel 
+          selectedNode={selectedIds.size === 1 ? nodes.find(n => n.id === Array.from(selectedIds)[0]) || null : null}
+          onClose={() => setSelectedIds(new Set())}
+          onUpdate={(id, newData) => {
+              const newNodes = nodes.map(n => n.id === id ? { ...n, ...newData } : n);
+              setNodes(newNodes);
+              pushHistory(newNodes, connections);
+          }}
+          onBindProp={handleBindProp}
+          isDarkMode={isDarkMode}
+          boundProps={selectedIds.size === 1 ? nodes.find(n => n.id === Array.from(selectedIds)[0])?.boundProps || {} : {}}
+          onContextMenu={(menu) => setPropertyContextMenu(menu)}
+      />
+
       {/* UI HEADER */}
-      <div className={`fixed top-0 left-0 right-0 h-14 border-b flex items-center justify-between px-4 z-50 backdrop-blur-md ${isDarkMode ? 'bg-black/80 border-white/10' : 'bg-white/80 border-neutral-200'}`} onMouseDown={e => e.stopPropagation()}>
-          <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-accent-red animate-pulse" /><span className="font-bold tracking-tight">ANINODE</span><span className="text-xs font-mono opacity-50 border px-1 rounded">SYS.0.2</span></div>
-              <div className={`h-6 w-px ${isDarkMode ? 'bg-white/10' : 'bg-neutral-300'}`} />
-              <button onClick={() => { setIsNodePickerOpen(true); setPickerCounts({}); }} className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${isDarkMode ? 'hover:bg-white/10' : 'hover:bg-neutral-100'}`}><Plus size={14} /> Add Node</button>
-              <div className={`h-6 w-px ${isDarkMode ? 'bg-white/10' : 'bg-neutral-300'}`} />
-              <div className="flex items-center gap-1">
-                  <button onClick={handleUndo} className={`p-1.5 rounded hover:bg-white/10 ${historyIndex === 0 ? 'opacity-30' : ''}`}><Undo size={14}/></button>
-                  <button onClick={handleRedo} className={`p-1.5 rounded hover:bg-white/10 ${historyIndex === history.length - 1 ? 'opacity-30' : ''}`}><Redo size={14}/></button>
-              </div>
-          </div>
-          <div className="flex items-center gap-2">
-              <div className={`flex items-center p-1 rounded-lg border ${isDarkMode ? 'border-white/10 bg-black/50' : 'border-neutral-200 bg-neutral-50'}`}>
-                   <button onClick={() => setGridType('DOTS')} className={`p-1.5 rounded ${gridType === 'DOTS' ? (isDarkMode ? 'bg-white/20' : 'bg-white shadow') : ''}`}><Grid3X3 size={14}/></button>
-                   <button onClick={() => setGridType('LINES')} className={`p-1.5 rounded ${gridType === 'LINES' ? (isDarkMode ? 'bg-white/20' : 'bg-white shadow') : ''}`}><Grid size={14}/></button>
-                   <button onClick={() => setGridType('CROSS')} className={`p-1.5 rounded ${gridType === 'CROSS' ? (isDarkMode ? 'bg-white/20' : 'bg-white shadow') : ''}`}><Plus size={14}/></button>
-              </div>
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className={`p-2 rounded-lg border transition-colors ${isDarkMode ? 'border-white/10 hover:bg-white/10' : 'border-neutral-200 hover:bg-neutral-100'}`}>{isDarkMode ? <Moon size={16} /> : <Sun size={16} />}</button>
-          </div>
-      </div>
+      <Header 
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
+        gridType={gridType}
+        setGridType={setGridType}
+        historyIndex={historyIndex}
+        historyLength={history.length}
+        handleUndo={handleUndo}
+        handleRedo={handleRedo}
+        setIsNodePickerOpen={setIsNodePickerOpen}
+        setPickerCounts={setPickerCounts}
+      />
 
       {/* COMMAND LEGEND */}
-      <div className={`fixed bottom-4 left-4 p-4 rounded-xl border backdrop-blur-sm z-40 pointer-events-none ${isDarkMode ? 'bg-black/50 border-white/10 text-neutral-400' : 'bg-white/50 border-neutral-200 text-neutral-600'}`}>
-          <div className="text-[10px] font-mono space-y-1">
-              <div className="flex items-center gap-2"><Command size={10} /> <span>SHIFT + TAB : Node Picker</span></div>
-              <div className="flex items-center gap-2"><MousePointer2 size={10} /> <span>SHIFT + CLICK : Multi Select</span></div>
-              <div className="flex items-center gap-2"><Move size={10} /> <span>DRAG BG : Pan Canvas</span></div>
-              <div className="flex items-center gap-2"><Maximize size={10} /> <span>SHIFT + F : Focus All</span></div>
-              <div className="flex items-center gap-2"><Scan size={10} /> <span>F : Focus Selected</span></div>
-              <div className="flex items-center gap-2"><Copy size={10} /> <span>CTRL + C/V : Copy/Paste</span></div>
-              <div className="flex items-center gap-2"><Undo size={10} /> <span>CTRL + Z/Y : Undo/Redo</span></div>
-          </div>
-      </div>
+      <ShortcutsPanel isDarkMode={isDarkMode} />
 
       {/* NODE PICKER MODAL */}
-      {isNodePickerOpen && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center" onMouseDown={e => e.stopPropagation()}>
-              <div className={`w-[600px] h-[400px] rounded-2xl border shadow-2xl flex flex-col ${isDarkMode ? 'bg-neutral-900 border-white/10' : 'bg-white border-neutral-200'}`}>
-                  <div className="p-6 border-b flex justify-between items-center">
-                      <h2 className="text-xl font-bold tracking-tight">Add Nodes</h2>
-                      <div className="flex gap-2">
-                        {Object.keys(pickerCounts).length > 0 && <button onClick={handleNodePickerAdd} className="bg-accent-red text-white px-4 py-2 rounded text-xs font-bold">ADD SELECTED</button>}
-                        <button onClick={() => setIsNodePickerOpen(false)}><X /></button>
-                      </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-4 p-6 overflow-y-auto">
-                      {Object.values(NodeType).map(type => (
-                          <div key={type} className={`aspect-square rounded-xl border flex flex-col items-center justify-center cursor-pointer transition-all relative ${isDarkMode ? 'border-white/10 hover:bg-white/5' : 'border-neutral-200 hover:bg-neutral-50'}`} onClick={(e) => { if (e.shiftKey) { setPickerCounts(p => ({ ...p, [type]: (p[type] || 0) + 1 })); } else { addNode(type); setIsNodePickerOpen(false); } }}>
-                              <Box size={24} className="mb-2 opacity-50" /><span className="text-xs font-mono font-bold">{getTypeLabel(type)}</span>
-                              {pickerCounts[type] > 0 && <div className="absolute top-2 right-2 bg-accent-red text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{pickerCounts[type]}</div>}
-                          </div>
-                      ))}
-                  </div>
-              </div>
-          </div>
-      )}
+      <NodePicker 
+        isOpen={isNodePickerOpen}
+        onClose={() => setIsNodePickerOpen(false)}
+        isDarkMode={isDarkMode}
+        pickerCounts={pickerCounts}
+        setPickerCounts={setPickerCounts}
+        onAdd={handleNodePickerAdd}
+        onSingleAdd={addNode}
+      />
       
       {/* MENUS */}
       {activeMenu === 'PORT' && menuData && (
@@ -877,100 +788,62 @@ export default function App() {
                           type: ConnectionType.BEZIER 
                       }];
                       setConnections(newConns);
-                      pushHistory([...nodes, newNode], newConns);
-                      setActiveMenu(null); 
+                      pushHistory(nodes, newConns);
+                      setActiveMenu(null);
                   }}>
                       {getTypeLabel(type)}
                   </button>
               ))}
           </div>
       )}
-      {activeMenu === 'DISCONNECT' && menuData && (
-          <div className="fixed z-[100] w-56 bg-black border border-neutral-800 rounded-lg shadow-xl p-2" style={{ left: menuData.x, top: menuData.y }} onMouseDown={e => e.stopPropagation()}>
-              <div className="text-xs font-bold text-neutral-500 mb-2 px-2 uppercase tracking-wider">Connected</div>
-              {connections.filter(c => c.source === menuData.nodeId || c.target === menuData.nodeId).map(c => (<div key={c.id} className="flex items-center gap-2 px-2 py-1 hover:bg-white/10 rounded cursor-pointer" onClick={() => { 
-                  const newConns = connections.filter(x => x.id !== c.id);
-                  setConnections(newConns); 
-                  pushHistory(nodes, newConns);
-                  setActiveMenu(null); 
-              }}><div className="w-3 h-3 border border-accent-red bg-accent-red rounded flex items-center justify-center"><X size={8} className="text-white" /></div><span className="text-xs font-mono text-white truncate flex-1">Wire {c.id.slice(-4)}</span></div>))}
+
+      {activeMenu === 'CONNECTION' && menuData && (
+          <div className="fixed z-[100] w-48 bg-black border border-neutral-800 rounded-lg shadow-xl" style={{ left: menuData.x, top: menuData.y }} onMouseDown={e => e.stopPropagation()}>
+              <div className="px-4 py-2 text-xs font-bold text-neutral-500 border-b border-neutral-800">Connection Type</div>
+              {Object.values(ConnectionType).map(type => (
+                  <button key={type} className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => {
+                      const newConns = [...connections, { id: `c_${Date.now()}`, source: menuData.source, target: menuData.target, type }];
+                      setConnections(newConns);
+                      pushHistory(nodes, newConns);
+                      setActiveMenu(null);
+                  }}>
+                      {type}
+                  </button>
+              ))}
           </div>
       )}
-      {activeMenu === 'CONNECTION' && menuData && (
-          <div className="fixed z-[100] w-40 bg-black border border-neutral-800 rounded-lg shadow-xl" style={{ left: menuData.x, top: menuData.y }} onMouseDown={e => e.stopPropagation()}>{Object.values(ConnectionType).map(type => (<button key={type} className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { 
-              const newConns = [...connections, { id: `c_${Date.now()}`, source: menuData.source, target: menuData.target, type }];
-              setConnections(newConns); 
-              pushHistory(nodes, newConns);
-              setActiveMenu(null); 
-          }}>{type}</button>))}</div>
+
+      {activeMenu === 'DISCONNECT' && menuData && (
+          <div className="fixed z-[100] w-48 bg-black border border-neutral-800 rounded-lg shadow-xl" style={{ left: menuData.x, top: menuData.y }} onMouseDown={e => e.stopPropagation()}>
+              <button className="block w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-white/10" onClick={() => {
+                  const newConns = connections.filter(c => !(c.target === menuData.nodeId && menuData.type === 'input') && !(c.source === menuData.nodeId && menuData.type === 'output'));
+                  setConnections(newConns);
+                  pushHistory(nodes, newConns);
+                  setActiveMenu(null);
+              }}>
+                  Disconnect All
+              </button>
+          </div>
       )}
 
-      <SidePanel 
-        selectedNode={nodes.find(n => n.id === Array.from(selectedIds).pop()) || null} 
-        onClose={() => setSelectedIds(new Set())} 
-        onUpdate={(id, d) => {
-            const newNodes = nodes.map(n => n.id === id ? { ...n, ...d } : n);
-            setNodes(newNodes);
-            // pushHistory? Maybe not on every update.
-        }}
-        onBindProp={handleBindProp}
-        isDarkMode={isDarkMode}
-        boundProps={nodes.find(n => n.id === Array.from(selectedIds).pop())?.boundProps || {}}
-        onContextMenu={setPropertyContextMenu}
-      />
-
-      {/* Property Context Menu - Rendered at Root Level */}
-      {propertyContextMenu && (() => {
-        const selectedNode = nodes.find(n => n.id === propertyContextMenu.nodeId);
-        const isBound = selectedNode?.boundProps?.[propertyContextMenu.propKey];
-        const sourceBinding = isBound ? selectedNode.boundProps[propertyContextMenu.propKey] : null;
-        
-        return (
-          <div 
-            className={`fixed rounded-lg shadow-xl border overflow-hidden z-[200] min-w-[200px] ${isDarkMode ? 'bg-black border-neutral-800' : 'bg-white border-neutral-200'}`}
-            style={{ left: propertyContextMenu.x, top: propertyContextMenu.y }}
-            onClick={(e) => e.stopPropagation()}
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-              <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-wider opacity-50 border-b border-white/10">Teleport Property</div>
-              
-              {isBound ? (
-                <>
-                  <div className="px-4 py-2 text-[10px] text-accent-red border-b border-white/5">
-                    <div className="flex items-center gap-1">
-                      <LinkIcon size={10} />
-                      <span>Bound to: {sourceBinding?.targetProp}</span>
-                    </div>
-                  </div>
-                  <button 
-                    className={`flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs font-mono hover:bg-red-600 hover:text-white transition-colors ${isDarkMode ? 'text-white' : 'text-neutral-900'}`}
-                    onClick={(e) => { e.stopPropagation(); handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'UNBIND'); setPropertyContextMenu(null); }}
-                  >
-                      <Unlink size={12} /> Unbind Property
+      {/* PROPERTY TELEPORT MENU */}
+      {propertyContextMenu && (
+          <div className="fixed z-[100] w-48 bg-black border border-neutral-800 rounded-lg shadow-xl" style={{ left: propertyContextMenu.x, top: propertyContextMenu.y }} onMouseDown={e => e.stopPropagation()}>
+              <button className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'SEND'); setPropertyContextMenu(null); }}>
+                  Broadcast Property
+              </button>
+              {propertyTeleportBuffer && (
+                  <button className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'RECEIVE'); setPropertyContextMenu(null); }}>
+                      Receive from {nodes.find(n => n.id === propertyTeleportBuffer.nodeId)?.label}
                   </button>
-                </>
-              ) : (
-                <>
-                  <button 
-                    className={`flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs font-mono hover:bg-accent-red hover:text-white transition-colors ${isDarkMode ? 'text-white' : 'text-neutral-900'}`}
-                    onClick={(e) => { e.stopPropagation(); handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'SEND'); setPropertyContextMenu(null); }}
-                  >
-                      <LinkIcon size={12} /> Send "{propertyContextMenu.propKey}"
+              )}
+              {nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] && (
+                   <button className="block w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'UNBIND'); setPropertyContextMenu(null); }}>
+                      Unbind Property
                   </button>
-                  {propertyTeleportBuffer && (
-                    <button 
-                      className={`flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs font-mono hover:bg-accent-red hover:text-white transition-colors ${isDarkMode ? 'text-white' : 'text-neutral-900'}`}
-                      onClick={(e) => { e.stopPropagation(); handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'RECEIVE'); setPropertyContextMenu(null); }}
-                    >
-                        <Unlink size={12} /> Receive "{propertyTeleportBuffer.propKey}" here
-                    </button>
-                  )}
-                </>
               )}
           </div>
-        );
-      })()}
+      )}
     </div>
   );
 }

@@ -42,3 +42,5 @@ export interface Connection {
   target: string;
   type: ConnectionType;
 }
+
+export type GridType = 'DOTS' | 'LINES' | 'CROSS';
