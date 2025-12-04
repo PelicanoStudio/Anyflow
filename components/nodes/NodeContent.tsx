@@ -41,7 +41,7 @@ export const NodeContent: React.FC<NodeContentProps> = ({
           );
       case NodeType.SLIDER:
           return (
-              <div className="pt-2">
+              <div className="pt-2" onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
                   <div className="flex justify-between text-xs font-mono mb-1 opacity-70">
                       <span>{node.config.min || 0}</span><span className="text-accent-red font-bold">{node.config.value}</span><span>{node.config.max || 100}</span>
                   </div>
@@ -55,8 +55,6 @@ export const NodeContent: React.FC<NodeContentProps> = ({
                     onMouseUp={pushHistory} 
                     onTouchEnd={pushHistory} 
                     className="w-full h-1 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-accent-red" 
-                    onMouseDown={(e) => e.stopPropagation()} 
-                    onTouchStart={(e) => e.stopPropagation()} 
                     onContextMenu={(e) => { e.preventDefault(); onPropertyContextMenu?.(node.id, 'value', e.clientX, e.clientY); }}
                     {...valueLongPress}
                   />

@@ -20,8 +20,8 @@ export const CanvasBackground: React.FC<CanvasBackgroundProps> = ({
             backgroundPosition: `${viewport.x}px ${viewport.y}px`, 
             backgroundSize: `${SNAP_SIZE * viewport.zoom}px ${SNAP_SIZE * viewport.zoom}px`, 
             backgroundImage: gridType === 'DOTS' 
-                ? `radial-gradient(${isDarkMode ? '#444' : '#ffffffff'} 2px, transparent 2px)` 
-                : `linear-gradient(${isDarkMode ? '#333' : '#ffffffff'} 1.5px, transparent 1.5px), linear-gradient(90deg, ${isDarkMode ? '#333' : '#BBB'} 1.5px, transparent 1.5px)` 
+                ? `radial-gradient(${isDarkMode ? '#ffffffff' : '#333'} 1px, transparent 2px)` 
+                : `linear-gradient(${isDarkMode ? '#ffffffff' : '#333'} 1px, transparent 1.5px), linear-gradient(90deg, ${isDarkMode ? '#ffffffff' : '#333'} 1.5px, transparent 1.5px)` 
         }} 
     />
   );

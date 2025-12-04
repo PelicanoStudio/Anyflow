@@ -5,6 +5,7 @@ import { SidePanel } from './components/SidePanel';
 import { isMobileOrTablet } from './utils/deviceDetection';
 import { NEON_PALETTE, SNAP_SIZE } from './constants';
 import { getRayBoxIntersection } from './utils/geometry';
+import { getMenuPosition } from './utils/menuPosition';
 import { ShortcutsPanel } from './components/ui/ShortcutsPanel';
 import { Header } from './components/ui/Header';
 import { NodePicker } from './components/ui/NodePicker';
@@ -12,6 +13,7 @@ import { CanvasBackground } from './components/canvas/CanvasBackground';
 import { ConnectionLine } from './components/canvas/ConnectionLine';
 import { NodeContent } from './components/nodes/NodeContent';
 import { usePinchZoom } from './hooks/usePinchZoom';
+import { Link as LinkIcon, Unlink } from 'lucide-react';
 
 // History State Interface
 interface HistoryState {
@@ -354,6 +356,13 @@ export default function App() {
           if (tempWire.startId !== id && tempWire.startType !== type) {
                const sourceId = tempWire.startType === 'output' ? tempWire.startId : id;
                const targetId = tempWire.startType === 'input' ? tempWire.startId : id;
+               
+               // Check if connection already exists
+               if (connections.some(c => c.source === sourceId && c.target === targetId)) {
+                   setTempWire(null);
+                   return;
+               }
+               
                setMenuData({ source: sourceId, target: targetId, x: e.clientX, y: e.clientY });
                setActiveMenu('CONNECTION');
                setTempWire(null);
@@ -564,6 +573,9 @@ export default function App() {
           if (tempWire && !tempWire.isHot) setTempWire(null);
       }}
       onWheel={(e) => {
+        // Don't zoom if node picker is open
+        if (isNodePickerOpen) return;
+        
         if (e.shiftKey) { setViewport(prev => ({ ...prev, x: prev.x - e.deltaY, y: prev.y - e.deltaX })); return; }
         const zoomSensitivity = 0.001;
         const delta = -e.deltaY * zoomSensitivity;
@@ -827,23 +839,39 @@ export default function App() {
       )}
 
       {/* PROPERTY TELEPORT MENU */}
-      {propertyContextMenu && (
-          <div className="fixed z-[100] w-48 bg-black border border-neutral-800 rounded-lg shadow-xl" style={{ left: propertyContextMenu.x, top: propertyContextMenu.y }} onMouseDown={e => e.stopPropagation()}>
-              <button className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'SEND'); setPropertyContextMenu(null); }}>
-                  Broadcast Property
-              </button>
-              {propertyTeleportBuffer && (
-                  <button className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'RECEIVE'); setPropertyContextMenu(null); }}>
-                      Receive from {nodes.find(n => n.id === propertyTeleportBuffer.nodeId)?.label}
+      {propertyContextMenu && (() => {
+          // Calculate safe menu position
+          const menuWidth = 224; // w-56 = 14rem = 224px
+          const menuHeight = propertyTeleportBuffer 
+              ? (nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] ? 200 : 170)
+              : (nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] ? 130 : 100);
+          const safePos = getMenuPosition(propertyContextMenu.x, propertyContextMenu.y, menuWidth, menuHeight);
+          
+          return (
+              <div className="fixed z-[100] w-56 bg-black border border-neutral-800 rounded-lg shadow-xl overflow-hidden" style={{ left: safePos.left, top: safePos.top }} onMouseDown={e => e.stopPropagation()}>
+                  <div className="px-3 py-2 text-[10px] font-bold text-neutral-500 border-b border-neutral-800 uppercase tracking-wider">Property: {propertyContextMenu.propKey}</div>
+                  <button className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs text-white hover:bg-white/10 transition-colors" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'SEND'); setPropertyContextMenu(null); }}>
+                      <LinkIcon size={14} className="text-accent-red" />
+                      <span>Broadcast <span className="text-accent-red font-bold">{propertyContextMenu.propKey}</span></span>
                   </button>
-              )}
-              {nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] && (
-                   <button className="block w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-white/10" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'UNBIND'); setPropertyContextMenu(null); }}>
-                      Unbind Property
-                  </button>
-              )}
-          </div>
-      )}
+                  {propertyTeleportBuffer && (
+                      <button className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs text-white hover:bg-white/10 transition-colors border-t border-neutral-800/50" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'RECEIVE'); setPropertyContextMenu(null); }}>
+                          <LinkIcon size={14} className="text-green-500" />
+                          <div className="flex flex-col">
+                              <span>Receive <span className="text-green-500 font-bold">{propertyTeleportBuffer.propKey}</span></span>
+                              <span className="text-[10px] text-neutral-500">from <span className="text-neutral-400">{nodes.find(n => n.id === propertyTeleportBuffer.nodeId)?.label}</span></span>
+                          </div>
+                      </button>
+                  )}
+                  {nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] && (
+                       <button className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs text-red-500 hover:bg-white/10 transition-colors border-t border-neutral-800/50" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'UNBIND'); setPropertyContextMenu(null); }}>
+                          <Unlink size={14} />
+                          <span>Unbind <span className="font-bold">{propertyContextMenu.propKey}</span></span>
+                      </button>
+                  )}
+              </div>
+          );
+      })()}
     </div>
   );
 }
