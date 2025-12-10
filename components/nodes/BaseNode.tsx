@@ -2,6 +2,16 @@
 import React from 'react';
 import { NodeData, NodeType } from '../../types';
 import { ChevronDown, ChevronUp, GripHorizontal, Activity, Image as ImageIcon, Box, Monitor, Cpu, Sliders, Hash, ToggleLeft, Copy } from 'lucide-react';
+import { 
+  signalActive, 
+  getBorder, 
+  getPort,
+  getSurface,
+  nodeLayout,
+  zIndex,
+  iconSizes,
+  animation
+} from '../../src/tokens';
 
 interface BaseNodeProps {
   data: NodeData;
@@ -24,17 +34,18 @@ interface BaseNodeProps {
 }
 
 const getNodeIcon = (type: NodeType) => {
+  const iconSize = iconSizes.sm;
   switch (type) {
-    case NodeType.OSCILLATOR: return <Activity size={14} />;
-    case NodeType.PICKER: return <ImageIcon size={14} />;
-    case NodeType.TRANSFORM: return <Box size={14} />;
-    case NodeType.OUTPUT: return <Monitor size={14} />;
-    case NodeType.LOGIC: return <Cpu size={14} />;
-    case NodeType.SLIDER: return <Sliders size={14} />;
-    case NodeType.NUMBER: return <Hash size={14} />;
-    case NodeType.BOOLEAN: return <ToggleLeft size={14} />;
-    case NodeType.CLONE: return <Copy size={14} />;
-    default: return <Box size={14} />;
+    case NodeType.OSCILLATOR: return <Activity size={iconSize} />;
+    case NodeType.PICKER: return <ImageIcon size={iconSize} />;
+    case NodeType.TRANSFORM: return <Box size={iconSize} />;
+    case NodeType.OUTPUT: return <Monitor size={iconSize} />;
+    case NodeType.LOGIC: return <Cpu size={iconSize} />;
+    case NodeType.SLIDER: return <Sliders size={iconSize} />;
+    case NodeType.NUMBER: return <Hash size={iconSize} />;
+    case NodeType.BOOLEAN: return <ToggleLeft size={iconSize} />;
+    case NodeType.CLONE: return <Copy size={iconSize} />;
+    default: return <Box size={iconSize} />;
   }
 };
 
@@ -54,7 +65,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   data, 
   isSelected, 
   isActiveChain,
-  accentColor = '#FF1F1F',
+  accentColor = signalActive,
   zoom,
   isDarkMode,
   isHotConnectionSource,
@@ -71,21 +82,24 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   // Visual Logic
   const borderColor = (isSelected || isActiveChain) 
       ? accentColor 
-      : (isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)');
+      : getBorder('default', isDarkMode);
   
-  const bgColor = isDarkMode ? 'bg-black/90' : 'bg-white/95';
+  // Surface colors from tokens
+  const bgStyle = { backgroundColor: getSurface('node', isDarkMode) };
   const subTextColor = isDarkMode ? 'text-neutral-400' : 'text-neutral-500';
 
-  // Inverse scaling for borders using Clamp
-  const borderScale = Math.max(0.5, Math.min(3, 1 / zoom));
-  const activeBorderScale = Math.max(1, Math.min(4, 2 / zoom));
+  // Inverse scaling for borders using token values
+  const { scaleMin, scaleMax, activeScaleMin, activeScaleMax } = animation.borderAnimation;
+  const borderScale = Math.max(scaleMin, Math.min(scaleMax, 1 / zoom));
+  const activeBorderScale = Math.max(activeScaleMin, Math.min(activeScaleMax, 2 / zoom));
   const finalBorderWidth = isSelected ? activeBorderScale : borderScale;
   
-  // Reduced Glow
+  // Reduced Glow using animation tokens
+  const { selectedRadius, activeChainRadius } = animation.glow;
   const shadowStyle = isSelected 
-    ? `0 0 ${10 / zoom}px ${accentColor}30` 
+    ? `0 0 ${selectedRadius / zoom}px ${accentColor}30` 
     : isActiveChain 
-        ? `0 0 ${5 / zoom}px ${accentColor}10` 
+        ? `0 0 ${activeChainRadius / zoom}px ${accentColor}10` 
         : (isDarkMode ? '0 4px 6px rgba(0,0,0,0.3)' : '0 4px 6px rgba(0,0,0,0.1)');
 
   // Clone Animation
@@ -93,15 +107,17 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
 
   return (
     <div 
-      className={`absolute rounded-xl backdrop-blur-md border-solid group select-none transition-colors duration-200 ease-out pointer-events-auto ${bgColor} ${animationClass}`}
+      className={`absolute rounded-xl backdrop-blur-md border-solid group select-none transition-colors duration-200 ease-out pointer-events-auto ${animationClass}`}
       style={{ 
+        ...bgStyle,
         left: data.position.x, 
         top: data.position.y,
         borderColor: borderColor,
         borderWidth: `${finalBorderWidth}px`,
         boxShadow: shadowStyle,
-        zIndex: isSelected ? 50 : 10,
-        width: '256px' 
+        zIndex: isSelected ? zIndex.nodeSelected : zIndex.node,
+        width: nodeLayout.width,
+        borderRadius: nodeLayout.borderRadius 
       }}
       onClick={(e) => {
         e.stopPropagation();
@@ -135,13 +151,13 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
             <div 
                 className={`w-3 h-3 border rounded-full flex items-center justify-center transition-all duration-300 group-hover/port:scale-150 ${isDarkMode ? 'bg-black' : 'bg-white'} ${isHotConnectionSource ? 'animate-ping' : ''}`}
                 style={{ 
-                    borderColor: isActiveChain ? accentColor : (isDarkMode ? '#555' : '#CCC'),
+                    borderColor: isActiveChain ? accentColor : getPort('inactive', isDarkMode),
                     borderWidth: `${borderScale}px` 
                 }}
             >
                 <div 
                     className="w-1.5 h-1.5 rounded-full" 
-                    style={{ backgroundColor: isActiveChain ? accentColor : (isDarkMode ? '#333' : '#CCC') }}
+                    style={{ backgroundColor: isActiveChain ? accentColor : getPort('innerInactive', isDarkMode) }}
                 />
             </div>
         </div>
@@ -171,13 +187,13 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
             <div 
                 className={`w-3 h-3 border rounded-full flex items-center justify-center transition-all duration-300 group-hover/port:scale-150 ${isDarkMode ? 'bg-black' : 'bg-white'} ${isHotConnectionSource ? 'animate-ping' : ''}`}
                 style={{ 
-                    borderColor: isActiveChain ? accentColor : (isDarkMode ? '#555' : '#CCC'),
+                    borderColor: isActiveChain ? accentColor : getPort('inactive', isDarkMode),
                     borderWidth: `${borderScale}px`
                 }}
             >
                 <div 
                     className="w-1.5 h-1.5 rounded-full" 
-                    style={{ backgroundColor: isActiveChain ? accentColor : (isDarkMode ? '#333' : '#CCC') }}
+                    style={{ backgroundColor: isActiveChain ? accentColor : getPort('innerInactive', isDarkMode) }}
                 />
             </div>
          </div>
