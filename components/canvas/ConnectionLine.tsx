@@ -37,23 +37,32 @@ export const ConnectionLine: React.FC<ConnectionLineProps> = ({
   let strokeColor = getWire('default', isDarkMode);
 
   // Port offset constants from tokens
-  const outputX = portLayout.outputX;  // 272
+  const nodeWidth = nodeLayout.width;
+  const sourceWidth = sourceNode?.dimensions?.width || nodeWidth;
+  
+  // Calculate dynamic output X based on node width
+  // Original static logic: outputX = 272 (256 + 16). 
+  // Dynamic: width + 16
+  const outputX = sourceWidth + 16;
   const inputX = portLayout.inputX;    // -16
   const portY = portLayout.offsetY;    // 40
   const controlOffset = wireLayout.controlPointOffset; // 100
 
   // Telepathic Arrow
   if (connection.type === ConnectionType.STRAIGHT) {
-      const nodeWidth = nodeLayout.width;
-      const nodeHeight = nodeLayout.defaultHeight;
-      const sw = nodeWidth; 
-      const sh = nodeHeight; 
-      const scx = s.x + sw/2; 
-      const scy = s.y + sh/2; 
-      const tcx = t.x + sw/2; 
-      const tcy = t.y + sh/2;
-      const end = getRayBoxIntersection(scx, scy, tcx, tcy, nodeWidth, 128, wireLayout.dashGap / viewport.zoom);
-      const start = getRayBoxIntersection(tcx, tcy, scx, scy, nodeWidth, 128, wireLayout.dashGap / viewport.zoom);
+      const sWidth = sourceNode?.dimensions?.width || nodeWidth;
+      const sHeight = sourceNode?.dimensions?.height || nodeLayout.defaultHeight;
+      const tWidth = targetNode?.dimensions?.width || nodeWidth;
+      const tHeight = targetNode?.dimensions?.height || nodeLayout.defaultHeight;
+      
+      const scx = s.x + sWidth/2; 
+      const scy = s.y + sHeight/2; 
+      const tcx = t.x + tWidth/2; 
+      const tcy = t.y + tHeight/2;
+      
+      const end = getRayBoxIntersection(scx, scy, tcx, tcy, tWidth, tHeight, wireLayout.dashGap / viewport.zoom);
+      const start = getRayBoxIntersection(tcx, tcy, scx, scy, sWidth, sHeight, wireLayout.dashGap / viewport.zoom);
+      
       d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
       strokeWidth = Math.max(1, 1.5 / viewport.zoom);
       strokeDash = `${wireLayout.dashGap/viewport.zoom} ${wireLayout.dashGap/viewport.zoom}`;

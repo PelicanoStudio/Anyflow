@@ -43,11 +43,15 @@ export const NodeContent: React.FC<NodeContentProps> = ({
 
   switch(node.type) {
       case NodeType.OSCILLATOR:
-          return <Visualizer type="sine" frequency={node.config.frequency || 1} amplitude={node.config.amplitude || 1} active={true} isDarkMode={isDarkMode} />;
+          return (
+              <div className="w-full h-full flex flex-col">
+                  <Visualizer type="sine" frequency={node.config.frequency || 1} amplitude={node.config.amplitude || 1} active={true} isDarkMode={isDarkMode} />
+              </div>
+          );
       case NodeType.PICKER:
           return (
               <div 
-                className="w-full aspect-video rounded-lg overflow-hidden relative group"
+                className="w-full h-full flex-1 min-h-[100px] rounded-lg overflow-hidden relative group"
                 style={{ backgroundColor: getSurface('menu', isDarkMode) }}
               >
                    {node.config.src ? <img src={node.config.src} alt="Asset" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-neutral-700">No Asset</div>}

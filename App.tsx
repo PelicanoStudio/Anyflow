@@ -23,7 +23,8 @@ import {
   signalActive,
   iconSizes,
   neonPalette,
-  canvasLayout
+  canvasLayout,
+  nodeLayout
 } from './src/tokens';
 
 // Local aliases for backward compatibility
@@ -634,7 +635,9 @@ export default function App() {
             ))}
              {tempWire && (
                 <path 
-                  d={`M ${tempWire.startType === 'output' ? getNodePosition(tempWire.startId).x + portLayout.outputX : getNodePosition(tempWire.startId).x + portLayout.inputX} ${getNodePosition(tempWire.startId).y + portLayout.offsetY} L ${tempWire.mouseX} ${tempWire.mouseY}`} 
+                  d={`M ${tempWire.startType === 'output' 
+                      ? getNodePosition(tempWire.startId).x + (nodes.find(n => n.id === tempWire.startId)?.dimensions?.width ?? nodeLayout.width) + 16
+                      : getNodePosition(tempWire.startId).x + portLayout.inputX} ${getNodePosition(tempWire.startId).y + portLayout.offsetY} L ${tempWire.mouseX} ${tempWire.mouseY}`} 
                   stroke={getWire('temp', isDarkMode)} 
                   strokeWidth={2 / viewport.zoom} 
                   strokeDasharray="5 5" 
@@ -659,6 +662,16 @@ export default function App() {
                     // But we handle selection in onNodeDown to allow drag-select.
                 }}
                 onToggleCollapse={(id) => setNodes(p => p.map(n => n.id === id ? { ...n, collapsed: !n.collapsed } : n))}
+                onResize={(id, width, height, x, y) => {
+                    setNodes(prev => prev.map(n => {
+                        if (n.id !== id) return n;
+                        const update: any = { dimensions: { width, height } };
+                        if (x !== undefined && y !== undefined) {
+                            update.position = { x, y };
+                        }
+                        return { ...n, ...update };
+                    }));
+                }}
                 onPortDown={handlePortDown}
                 onPortUp={handlePortUp}
                 onPortContextMenu={(id, type, e) => { setMenuData({ nodeId: id, type, x: e.clientX, y: e.clientY }); setActiveMenu('DISCONNECT'); }}
@@ -694,7 +707,8 @@ export default function App() {
                                 id: newId,
                                 label: n.label + ' (Copy)',
                                 position: { x: n.position.x + 50, y: n.position.y + 50 },
-                                boundProps: { ...n.boundProps }
+                                boundProps: { ...n.boundProps },
+                                dimensions: n.dimensions ? { ...n.dimensions } : undefined
                             });
                         });
 
