@@ -1,6 +1,9 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useSnapshot } from 'valtio';
+import { graphState, graphActions } from './src/core/store';
 import { NodeData, Connection, NodeType, ConnectionType, GridType } from './types';
-import { BaseNode, getTypeLabel } from './components/nodes/BaseNode';
+import { BaseNode } from './components/nodes/BaseNode';
+import { getTypeLabel } from './src/utils/nodeUtils';
 import { SidePanel } from './components/SidePanel';
 import { isMobileOrTablet } from './utils/deviceDetection';
 import { getRayBoxIntersection } from './utils/geometry';
@@ -10,265 +13,87 @@ import { Header } from './components/ui/Header';
 import { NodePicker } from './components/ui/NodePicker';
 import { CanvasBackground } from './components/canvas/CanvasBackground';
 import { ConnectionLine } from './components/canvas/ConnectionLine';
-import { NodeContent } from './components/nodes/NodeContent';
+// NodeContent is now internal to BaseNode, so we don't import it here
 import { usePinchZoom } from './hooks/usePinchZoom';
 import { Link as LinkIcon, Unlink } from 'lucide-react';
 import { 
   getWire, 
-  getSurface, 
-  getBorder,
   portLayout,
-  panelLayout,
   zIndex,
-  signalActive,
-  iconSizes,
   neonPalette,
   canvasLayout,
   nodeLayout
 } from './src/tokens';
 
-// Local aliases for backward compatibility
 const NEON_PALETTE = neonPalette;
 const SNAP_SIZE = canvasLayout.snapSize;
 
-// History State Interface
-interface HistoryState {
-    nodes: NodeData[];
-    connections: Connection[];
-}
-
 export default function App() {
-  // --- STATE ---
-  const [nodes, setNodes] = useState<NodeData[]>([
-     { id: 'init_lfo', type: NodeType.OSCILLATOR, label: 'Master LFO', position: { x: 100, y: 100 }, config: { frequency: 1, amplitude: 1 } },
-  ]);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const snap = useSnapshot(graphState);
   
-  // Selection & Clipboard
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [clipboard, setClipboard] = useState<NodeData[]>([]);
-
-  // History
-  const [history, setHistory] = useState<HistoryState[]>([{ nodes: [
-     { id: 'init_lfo', type: NodeType.OSCILLATOR, label: 'Master LFO', position: { x: 100, y: 100 }, config: { frequency: 1, amplitude: 1 } },
-  ], connections: [] }]);
-  const [historyIndex, setHistoryIndex] = useState(0);
-
-  // Appearance
-  const [isDarkMode, setIsDarkMode] = useState(true);
-  const [gridType, setGridType] = useState<GridType>('CROSS');
-
-  // Menus & Modals
+  // Local UI state
   const [activeMenu, setActiveMenu] = useState<'MAIN' | 'CONNECTION' | 'DISCONNECT' | 'PORT' | null>(null);
   const [menuData, setMenuData] = useState<any>(null);
   const [isNodePickerOpen, setIsNodePickerOpen] = useState(false);
   const [pickerCounts, setPickerCounts] = useState<Record<string, number>>({});
-
-  // Canvas
-  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Interaction
-  const [dragState, setDragState] = useState<{ 
-      nodeIds: string[], 
-      startPositions: Record<string, {x: number, y: number}>,
-      mouseStartX: number, 
-      mouseStartY: number 
-  } | null>(null);
   
+  const containerRef = useRef<HTMLDivElement>(null);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0, mouseX: 0, mouseY: 0 });
 
-  // Wiring
   const [tempWire, setTempWire] = useState<{ startId: string, startType: 'input' | 'output', mouseX: number, mouseY: number, isHot?: boolean } | null>(null);
   const [propertyTeleportBuffer, setPropertyTeleportBuffer] = useState<{ nodeId: string, propKey: string } | null>(null);
   const [propertyContextMenu, setPropertyContextMenu] = useState<{ x: number, y: number, propKey: string, nodeId: string } | null>(null);
 
-  // Hooks
-  usePinchZoom(viewport, setViewport, containerRef);
+  // --- VIEWPORT CULLING ---
+  const visibleNodes = useMemo(() => {
+    const viewportW = window.innerWidth / snap.viewport.zoom;
+    const viewportH = window.innerHeight / snap.viewport.zoom;
+    const viewportX = -snap.viewport.x / snap.viewport.zoom;
+    const viewportY = -snap.viewport.y / snap.viewport.zoom;
+    const buffer = 500;
 
-  // Update HTML class for Tailwind dark mode
+    return snap.nodes.filter(node => {
+        const w = node.dimensions?.width || nodeLayout.width;
+        const h = node.dimensions?.height || nodeLayout.defaultHeight;
+        return (
+            node.position.x + w > viewportX - buffer &&
+            node.position.x < viewportX + viewportW + buffer &&
+            node.position.y + h > viewportY - buffer &&
+            node.position.y < viewportY + viewportH + buffer
+        );
+    });
+  }, [snap.nodes, snap.viewport]);
+
+  usePinchZoom(snap.viewport, graphActions.setViewport, containerRef);
+
   useEffect(() => {
-    if (isDarkMode) document.documentElement.classList.add('dark');
+    if (snap.isDarkMode) document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
-  }, [isDarkMode]);
+  }, [snap.isDarkMode]);
 
-  // --- HISTORY MANAGEMENT ---
-  const pushHistory = (newNodes: NodeData[] = nodes, newConnections: Connection[] = connections) => {
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push({ nodes: newNodes, connections: newConnections });
-      setHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
-  };
-
-  const handleUndo = () => {
-      if (historyIndex > 0) {
-          const prev = history[historyIndex - 1];
-          setNodes(prev.nodes);
-          setConnections(prev.connections);
-          setHistoryIndex(historyIndex - 1);
-          // Update selection if selected nodes don't exist anymore
-          setSelectedIds(new Set()); 
-      }
-  };
-
-  const handleRedo = () => {
-      if (historyIndex < history.length - 1) {
-          const next = history[historyIndex + 1];
-          setNodes(next.nodes);
-          setConnections(next.connections);
-          setHistoryIndex(historyIndex + 1);
-          setSelectedIds(new Set());
-      }
-  };
-
+  // --- STABLE HELPERS ---
+  // Read directly from graphState to avoid dependencies used in Event Handlers
   const screenToWorld = useCallback((screenX: number, screenY: number) => {
-      return { x: (screenX - viewport.x) / viewport.zoom, y: (screenY - viewport.y) / viewport.zoom };
-  }, [viewport]);
+      // Use latest state, not snapshot, to be safe in async/callbacks? 
+      // Actually snapshot is fine for render, but for callbacks let's read proxy or assume consistency.
+      const { x, y, zoom } = graphState.viewport;
+      return { x: (screenX - x) / zoom, y: (screenY - y) / zoom };
+  }, []);
 
-  const getNodePosition = useCallback((id: string) => {
-      // If dragging, return tentative position
-      if (dragState && dragState.nodeIds.includes(id)) {
-          const startPos = dragState.startPositions[id];
-          if (startPos) {
-             const deltaX = (dragState.mouseStartX - dragState.mouseStartX) / viewport.zoom; // Wait, this is 0. 
-             // We need current mouse pos. But we don't have it in callback.
-             // Actually, we update nodes in real-time during drag? 
-             // No, App_OLD updated dragState.currentX/Y.
-             // Here we have multiple nodes.
-             // Let's use the node's position from state, which we update during drag.
-             const node = nodes.find(n => n.id === id);
-             return node ? node.position : { x: 0, y: 0 };
-          }
-      }
-      const node = nodes.find(n => n.id === id);
+  const getNodePosition = (id: string) => {
+      const node = graphState.nodes.find(n => n.id === id);
       return node ? node.position : { x: 0, y: 0 };
-  }, [nodes, dragState]);
-
-  // --- FOCUS LOGIC ---
-  const fitView = (targetIds: string[] = []) => {
-      const targets = targetIds.length > 0 
-          ? nodes.filter(n => targetIds.includes(n.id))
-          : nodes;
-      
-      if (targets.length === 0) return;
-
-      const padding = 100;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-      targets.forEach(n => {
-          minX = Math.min(minX, n.position.x);
-          minY = Math.min(minY, n.position.y);
-          maxX = Math.max(maxX, n.position.x + 256); // Width
-          maxY = Math.max(maxY, n.position.y + 128); // Height
-      });
-
-      const width = maxX - minX;
-      const height = maxY - minY;
-      const screenW = window.innerWidth;
-      const screenH = window.innerHeight;
-
-      const zoomX = (screenW - padding * 2) / width;
-      const zoomY = (screenH - padding * 2) / height;
-      const newZoom = Math.min(Math.max(Math.min(zoomX, zoomY), 0.2), 2);
-
-      const centerX = minX + width / 2;
-      const centerY = minY + height / 2;
-
-      setViewport({
-          x: screenW / 2 - centerX * newZoom,
-          y: screenH / 2 - centerY * newZoom,
-          zoom: newZoom
-      });
   };
 
-  // --- KEYBOARD SHORTCUTS ---
-  useEffect(() => {
-      const handleKeyDown = (e: KeyboardEvent) => {
-          // Focus
-          if (e.key.toLowerCase() === 'f') {
-              if (e.shiftKey) fitView([]); // Focus All
-              else fitView(Array.from(selectedIds)); // Focus Selected
-          }
+  const handleUndo = () => graphActions.undo();
+  const handleRedo = () => graphActions.redo();
 
-          // Undo/Redo
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-              e.preventDefault();
-              handleUndo();
-          }
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-              e.preventDefault();
-              handleRedo();
-          }
-
-          // Copy/Paste
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
-              const selected = nodes.filter(n => selectedIds.has(n.id));
-              if (selected.length > 0) setClipboard(selected);
-          }
-          if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-              if (clipboard.length > 0) {
-                  const newNodes: NodeData[] = [];
-                  const idMap = new Map<string, string>();
-                  
-                  // Calculate center of clipboard nodes
-                  let minX = Infinity, minY = Infinity;
-                  clipboard.forEach(n => { minX = Math.min(minX, n.position.x); minY = Math.min(minY, n.position.y); });
-                  
-                  // Paste at mouse position? Or center of screen? Center of screen for now.
-                  const center = screenToWorld(window.innerWidth/2, window.innerHeight/2);
-                  const offsetX = center.x - minX - 100; // Offset slightly
-                  const offsetY = center.y - minY - 100;
-
-                  clipboard.forEach(node => {
-                      const newId = `n_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                      idMap.set(node.id, newId);
-                      newNodes.push({
-                          ...node,
-                          id: newId,
-                          position: { x: node.position.x + offsetX, y: node.position.y + offsetY },
-                          label: node.label + ' (Copy)',
-                          // Clear bindings on paste
-                          boundProps: {} 
-                      });
-                  });
-
-                  const updatedNodes = [...nodes, ...newNodes];
-                  setNodes(updatedNodes);
-                  setSelectedIds(new Set(newNodes.map(n => n.id)));
-                  pushHistory(updatedNodes, connections);
-              }
-          }
-
-          if (e.shiftKey && e.key === 'Tab') {
-              e.preventDefault();
-              setIsNodePickerOpen(prev => !prev);
-              setPickerCounts({});
-          }
-          if (e.key === 'Delete' || e.key === 'Backspace') {
-             if (selectedIds.size > 0) {
-                 const newNodes = nodes.filter(n => !selectedIds.has(n.id));
-                 const newConnections = connections.filter(c => !selectedIds.has(c.source) && !selectedIds.has(c.target));
-                 setNodes(newNodes);
-                 setConnections(newConnections);
-                 setSelectedIds(new Set());
-                 pushHistory(newNodes, newConnections);
-             }
-          }
-          if (e.key === 'Escape') {
-              setSelectedIds(new Set());
-              if (tempWire?.isHot) setTempWire(null);
-              setActiveMenu(null);
-              setIsNodePickerOpen(false);
-          }
-      };
-      window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, clipboard, nodes, connections, historyIndex, viewport]);
-
-  // --- NODE OPERATIONS ---
-  const addNode = (type: NodeType, x?: number, y?: number) => {
-      const center = screenToWorld(window.innerWidth/2, window.innerHeight/2);
+  // STABLE: addNode
+  const addNode = useCallback((type: NodeType, x?: number, y?: number) => {
+      const { x: vx, y: vy, zoom } = graphState.viewport;
+      const center = { x: (window.innerWidth/2 - vx) / zoom, y: (window.innerHeight/2 - vy) / zoom };
+      
       const newNode: NodeData = {
            id: `n_${Date.now()}_${Math.random()}`,
            type,
@@ -276,151 +101,230 @@ export default function App() {
            position: { x: x ?? center.x - 128, y: y ?? center.y - 50 },
            config: type === NodeType.PICKER ? { src: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop' } : { min: 0, max: 100, step: 1, value: 50, enabled: true }
       };
-      const newNodes = [...nodes, newNode];
-      setNodes(newNodes);
-      pushHistory(newNodes, connections);
+      graphState.nodes.push(newNode);
+      graphActions.pushHistory();
       return newNode;
-  };
+  }, []);
 
-  const handleNodePickerAdd = () => {
-      const startX = viewport.x * -1 + 100;
-      const startY = viewport.y * -1 + 100;
-      let offset = 0;
-      const newNodes = [...nodes];
-      Object.entries(pickerCounts).forEach(([type, count]) => {
-          for(let i=0; i<(count as number); i++) {
-              newNodes.push({
-                  id: `n_${Date.now()}_${Math.random()}`,
-                  type: type as NodeType,
-                  label: `New ${getTypeLabel(type as NodeType)}`,
-                  position: { x: startX + offset * 50, y: startY + offset * 50 },
-                  config: type === NodeType.PICKER ? { src: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop' } : { min: 0, max: 100, step: 1, value: 50, enabled: true }
-              });
-              offset++;
-          }
-      });
-      setNodes(newNodes);
-      pushHistory(newNodes, connections);
-      setIsNodePickerOpen(false);
-  };
+  // STABLE: handleNodeDown
+  const handleNodeDown = useCallback((id: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      let newSelected = new Set(graphState.selection);
+      if (e.shiftKey) {
+          if (newSelected.has(id)) newSelected.delete(id);
+          else newSelected.add(id);
+      } else {
+          if (!newSelected.has(id)) newSelected = new Set([id]);
+      }
+      graphActions.setSelection(newSelected);
 
+      if (e.altKey) {
+          // Alt+Drag: Duplicate
+          const nodesToDuplicate = graphState.nodes.filter(n => newSelected.has(n.id));
+          const newNodes: NodeData[] = [];
+          
+          nodesToDuplicate.forEach(n => {
+             const newNode = {
+                 ...n,
+                 id: `n_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                 label: n.label + ' (Copy)',
+                 position: { x: n.position.x + 50, y: n.position.y + 50 },
+                 // Deep copy boundProps if needed or reset
+                 boundProps: n.boundProps ? { ...n.boundProps } : undefined,
+                 dimensions: n.dimensions ? { ...n.dimensions } : undefined
+             };
+             // Push directly? or collect.
+             graphState.nodes.push(newNode);
+             newNodes.push(newNode);
+          });
+          
+          // Select new nodes
+          const newSelection = new Set(newNodes.map(n => n.id));
+          graphActions.setSelection(newSelection);
+          
+          // Drag new nodes
+          const startPositions: Record<string, {x: number, y: number}> = {};
+          newNodes.forEach(n => startPositions[n.id] = { x: n.position.x, y: n.position.y });
+          graphState.dragState = { nodeIds: Array.from(newSelection), startPositions, mouseStartX: e.clientX, mouseStartY: e.clientY };
+          graphActions.pushHistory();
+
+      } else {
+          const startPositions: Record<string, {x: number, y: number}> = {};
+          graphState.nodes.filter(n => newSelected.has(n.id)).forEach(n => startPositions[n.id] = { x: n.position.x, y: n.position.y });
+          graphState.dragState = { nodeIds: Array.from(newSelected), startPositions, mouseStartX: e.clientX, mouseStartY: e.clientY };
+      }
+  }, []);
+
+  // STABLE: handlePropertyContextMenu
+  const handlePropertyContextMenu = useCallback((nodeId: string, propKey: string, x: number, y: number) => {
+      setPropertyContextMenu({ nodeId, propKey, x, y });
+  }, []);
+
+  // SEMI-STABLE: handleBindProp
+  // Still relies on setPropertyTeleportBuffer (local state).
+  // But passed to SidePanel usually, or context menu.
   const handleBindProp = (nodeId: string, propKey: string, action: 'SEND' | 'RECEIVE' | 'UNBIND') => {
       if (action === 'SEND') {
           setPropertyTeleportBuffer({ nodeId, propKey });
       } else if (action === 'RECEIVE' && propertyTeleportBuffer) {
-          const targetNode = nodes.find(n => n.id === nodeId);
+          const targetNode = graphState.nodes.find(n => n.id === nodeId);
           if (!targetNode) return;
 
-          // Store original value for restoration
           const originalValue = targetNode.config[propKey];
-
           const connId = `c_tele_${Date.now()}`;
-          const newConnections = [...connections, { id: connId, source: propertyTeleportBuffer.nodeId, target: nodeId, type: ConnectionType.STRAIGHT }];
           
-          const newNodes = nodes.map(n => n.id === nodeId ? { 
-              ...n, 
-              boundProps: { 
-                  ...n.boundProps, 
-                  [propKey]: { 
-                      targetNodeId: propertyTeleportBuffer.nodeId, 
-                      targetProp: propertyTeleportBuffer.propKey,
-                      originalValue: originalValue // Save original
-                  } 
-              } 
-          } : n);
-
-          setConnections(newConnections);
-          setNodes(newNodes);
-          pushHistory(newNodes, newConnections);
+          graphActions.addConnection({ id: connId, source: propertyTeleportBuffer.nodeId, target: nodeId, type: ConnectionType.STRAIGHT });
+          
+          if (!targetNode.boundProps) targetNode.boundProps = {};
+          targetNode.boundProps[propKey] = {
+              targetNodeId: propertyTeleportBuffer.nodeId, 
+              targetProp: propertyTeleportBuffer.propKey,
+              originalValue: originalValue
+          };
+          
+          graphActions.pushHistory();
           setPropertyTeleportBuffer(null);
 
       } else if (action === 'UNBIND') {
-          const targetNode = nodes.find(n => n.id === nodeId);
+          const targetNode = graphState.nodes.find(n => n.id === nodeId);
           if (!targetNode || !targetNode.boundProps?.[propKey]) return;
 
           const binding = targetNode.boundProps[propKey];
           
-          // Restore original value
           const restoredConfig = { ...targetNode.config };
           if (binding.originalValue !== undefined) {
               restoredConfig[propKey] = binding.originalValue;
           }
+          targetNode.config = restoredConfig;
+          delete targetNode.boundProps[propKey];
 
-          const { [propKey]: removed, ...remainingProps } = targetNode.boundProps;
-          
-          const newNodes = nodes.map(n => n.id === nodeId ? { 
-              ...n, 
-              config: restoredConfig,
-              boundProps: remainingProps 
-          } : n);
+          // Remove connection
+          graphState.connections = graphState.connections.filter(c => !(c.type === ConnectionType.STRAIGHT && c.target === nodeId && c.source === binding.targetNodeId));
 
-          // Remove telepathic connection
-          const newConnections = connections.filter(c => !(c.type === ConnectionType.STRAIGHT && c.target === nodeId && c.source === binding.targetNodeId));
-
-          setNodes(newNodes);
-          setConnections(newConnections);
-          pushHistory(newNodes, newConnections);
+          graphActions.pushHistory();
       }
   };
 
-  // --- WIRING HANDLERS ---
-  const handlePortDown = (id: string, type: 'input' | 'output', e: React.MouseEvent) => {
-      e.stopPropagation();
+  const activeChainIds = useMemo(() => {
+    const chain = new Set<string>();
+    const primarySelected = Array.from(snap.selection).pop();
+    if (!primarySelected) return chain;
+    
+    // BFS/DFS (using proxy state for speed? or snapshot for render accuracy? Snapshot.)
+    const findParents = (id: string) => { 
+        if(chain.has(id)) return; 
+        chain.add(id); 
+        snap.connections.filter(c => c.target === id).forEach(c => findParents(c.source)); 
+    };
+    const findChildren = (id: string) => { 
+        if(chain.has(id)) return; 
+        chain.add(id); 
+        snap.connections.filter(c => c.source === id).forEach(c => findChildren(c.target)); 
+    };
+    
+    findParents(primarySelected);
+    chain.clear(); chain.add(primarySelected);
+    snap.connections.filter(c => c.target === primarySelected).forEach(c => findParents(c.source));
+    snap.connections.filter(c => c.source === primarySelected).forEach(c => findChildren(c.target));
+    return chain;
+  }, [snap.selection, snap.connections]);
 
-      // Check if we are COMPLETING a hot wire
-      if (tempWire && tempWire.isHot) {
-          if (tempWire.startId !== id && tempWire.startType !== type) {
+  const nodeColors = useMemo(() => {
+    const map = new Map<string, string>();
+    const visited = new Set<string>();
+    const traverse = (nodeId: string, color: string) => {
+        if (visited.has(nodeId)) return;
+        visited.add(nodeId);
+        map.set(nodeId, color);
+        snap.connections.filter(c => c.source === nodeId).map(c => c.target).forEach(childId => traverse(childId, color));
+    };
+    let colorIndex = 0;
+    snap.nodes.filter(n => n.type === NodeType.PICKER).forEach(picker => {
+        traverse(picker.id, NEON_PALETTE[colorIndex % NEON_PALETTE.length]);
+        colorIndex++;
+    });
+    return map;
+  }, [snap.nodes, snap.connections]);
+
+  // Telepathic Sync Effect
+  useEffect(() => {
+      // Pure mutation of proxy for performance
+      graphState.nodes.forEach(targetNode => {
+          if (!targetNode.boundProps) return;
+          Object.entries(targetNode.boundProps).forEach(([propKey, binding]: [string, any]) => {
+              const sourceNode = graphState.nodes.find(n => n.id === binding.targetNodeId);
+              if (sourceNode) {
+                  let sourceValue = sourceNode.config[binding.targetProp];
+                  // Value mapping logic
+                  const maxVal = targetNode.config.max ?? 100;
+                  const isPercentageTarget = (targetNode.type === NodeType.SLIDER && maxVal === 100) ||
+                      (targetNode.type === NodeType.TRANSFORM && propKey === 'scale');
+                  if (isPercentageTarget) {
+                      if (typeof sourceValue === 'boolean') sourceValue = sourceValue ? 100 : 0;
+                      else if (typeof sourceValue === 'number' && sourceValue >= 0 && sourceValue <= 1) sourceValue = sourceValue * 100;
+                  } else if (typeof sourceValue === 'boolean') sourceValue = sourceValue ? 1 : 0;
+
+                  if (targetNode.config[propKey] !== sourceValue) {
+                      targetNode.config[propKey] = sourceValue;
+                  }
+              }
+          });
+      });
+  }, [snap.nodes]); 
+
+  // --- HANDLERS using State (less critical to be stable if passed to div, but good practice)
+  const handlePortDown = (id: string, type: 'input' | 'output', e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Logic dependent on tempWire (local state). 
+    // This function recreates on render. 
+    // But BaseNode only receives it for onPortDown prop. 
+    // And BaseNode memo checks equality.
+    // So this DOES cause re-render of BaseNode.
+    // However, Port actions are rarer than Move actions. 
+    // When Moving, tempWire doesn't change usually? 
+    // If tempWire changes (drag wire), App re-renders. 
+    // Optimization: Should move tempWire to global state eventually. 
+    // For now, accept re-render on wiring.
+    if (tempWire && tempWire.isHot) {
+        if (tempWire.startId !== id && tempWire.startType !== type) {
                const sourceId = tempWire.startType === 'output' ? tempWire.startId : id;
                const targetId = tempWire.startType === 'input' ? tempWire.startId : id;
-               
-               // Check if connection already exists
-               if (connections.some(c => c.source === sourceId && c.target === targetId)) {
-                   setTempWire(null);
-                   return;
+               if (graphState.connections.some(c => c.source === sourceId && c.target === targetId)) {
+                   setTempWire(null); return;
                }
-               
                setMenuData({ source: sourceId, target: targetId, x: e.clientX, y: e.clientY });
                setActiveMenu('CONNECTION');
                setTempWire(null);
           }
           return;
-      }
-
-      // Ctrl+Alt+Drag from Output -> Clone Node
-      if ((e.ctrlKey || e.metaKey) && e.altKey && type === 'output') {
-          const sourceNode = nodes.find(n => n.id === id);
+    }
+    
+    // Ctrl+Alt+Drag Clone Logic
+    if ((e.ctrlKey || e.metaKey) && e.altKey && type === 'output') {
+          const sourceNode = graphState.nodes.find(n => n.id === id);
           if (sourceNode) {
               const newNode = addNode(sourceNode.type, sourceNode.position.x + 50, sourceNode.position.y + 50);
-              const newConns = [...connections, { 
-                  id: `c_${Date.now()}`, 
-                  source: id, 
-                  target: newNode.id, 
-                  type: ConnectionType.BEZIER 
-              }];
-              setConnections(newConns);
-              pushHistory(nodes, newConns);
-              
-              // Start dragging the new node immediately
+              const newConn = { id: `c_${Date.now()}`, source: id, target: newNode.id, type: ConnectionType.BEZIER };
+              graphActions.addConnection(newConn);
+              graphActions.pushHistory();
+
               const startPositions: Record<string, {x: number, y: number}> = {};
               startPositions[newNode.id] = { x: newNode.position.x, y: newNode.position.y };
-              setDragState({ 
+              graphState.dragState = { 
                   nodeIds: [newNode.id], 
                   startPositions, 
                   mouseStartX: e.clientX, 
                   mouseStartY: e.clientY 
-              });
-              setSelectedIds(new Set([newNode.id]));
+              };
+              graphActions.setSelection(new Set([newNode.id]));
               return;
           }
-      }
-
-    if (e.shiftKey || isMobileOrTablet()) {
-        const worldPos = screenToWorld(e.clientX, e.clientY);
-        setTempWire({ startId: id, startType: type, mouseX: worldPos.x, mouseY: worldPos.y, isHot: true });
-        return;
     }
-      const worldPos = screenToWorld(e.clientX, e.clientY);
-      setTempWire({ startId: id, startType: type, mouseX: worldPos.x, mouseY: worldPos.y, isHot: false });
+
+    const { x, y, zoom } = graphState.viewport;
+    const worldX = (e.clientX - x) / zoom;
+    const worldY = (e.clientY - y) / zoom;
+    setTempWire({ startId: id, startType: type, mouseX: worldX, mouseY: worldY, isHot: e.shiftKey || isMobileOrTablet() });
   };
 
   const handlePortUp = (id: string, type: 'input' | 'output', e: React.MouseEvent) => {
@@ -430,248 +334,138 @@ export default function App() {
           if (!tempWire.isHot) setTempWire(null);
           return;
       }
-      // Valid connection attempt
       const sourceId = tempWire.startType === 'output' ? tempWire.startId : id;
       const targetId = tempWire.startType === 'input' ? tempWire.startId : id;
-      
-      // Check if connection already exists
-      if (connections.some(c => c.source === sourceId && c.target === targetId)) {
-          setTempWire(null);
-          return;
+      if (graphState.connections.some(c => c.source === sourceId && c.target === targetId)) {
+          setTempWire(null); return;
       }
-
       setMenuData({ source: sourceId, target: targetId, x: e.clientX, y: e.clientY });
       setActiveMenu('CONNECTION'); 
       setTempWire(null);
   };
 
-  const nodeColors = useMemo(() => {
-    const map = new Map<string, string>();
-    const visited = new Set<string>();
-    const traverse = (nodeId: string, color: string) => {
-        if (visited.has(nodeId)) return;
-        visited.add(nodeId);
-        map.set(nodeId, color);
-        connections.filter(c => c.source === nodeId).map(c => c.target).forEach(childId => traverse(childId, color));
-    };
-    let colorIndex = 0;
-    nodes.filter(n => n.type === NodeType.PICKER).forEach(picker => {
-        traverse(picker.id, NEON_PALETTE[colorIndex % NEON_PALETTE.length]);
-        colorIndex++;
-    });
-    return map;
-  }, [nodes, connections]);
-
-  const activeChainIds = useMemo(() => {
-    const chain = new Set<string>();
-    const primarySelected = Array.from(selectedIds).pop();
-    if (!primarySelected) return chain;
-    const primaryId = primarySelected as string;
-    
-    const findParents = (id: string) => { if(chain.has(id)) return; chain.add(id); connections.filter(c => c.target === id).forEach(c => findParents(c.source)); };
-    const findChildren = (id: string) => { if(chain.has(id)) return; chain.add(id); connections.filter(c => c.source === id).forEach(c => findChildren(c.target)); };
-    
-    findParents(primaryId);
-    chain.clear(); chain.add(primaryId);
-    connections.filter(c => c.target === primaryId).forEach(c => findParents(c.source));
-    connections.filter(c => c.source === primaryId).forEach(c => findChildren(c.target));
-    return chain;
-  }, [selectedIds, connections]);
-
-  // Synchronize property values for telepathic connections
-  useEffect(() => {
-      let changed = false;
-      const newNodes = nodes.map(targetNode => {
-          if (!targetNode.boundProps) return targetNode;
-          
-          const updatedConfig = { ...targetNode.config };
-          let nodeChanged = false;
-
-          Object.entries(targetNode.boundProps).forEach(([propKey, binding]: [string, any]) => {
-              const sourceNode = nodes.find(n => n.id === binding.targetNodeId);
-              if (sourceNode) {
-                  let sourceValue = sourceNode.config[binding.targetProp];
-                  
-                  // Boolean/Decimal -> Percentage Logic
-                  const maxVal = targetNode.config.max ?? 100;
-                  const isPercentageTarget = 
-                      (targetNode.type === NodeType.SLIDER && maxVal === 100) ||
-                      (targetNode.type === NodeType.TRANSFORM && propKey === 'scale');
-
-                  if (isPercentageTarget) {
-                      if (typeof sourceValue === 'boolean') {
-                          sourceValue = sourceValue ? 100 : 0;
-                      } else if (typeof sourceValue === 'number' && sourceValue >= 0 && sourceValue <= 1) {
-                          sourceValue = sourceValue * 100;
-                      }
-                  } else if (typeof sourceValue === 'boolean') {
-                      sourceValue = sourceValue ? 1 : 0;
-                  }
-
-                  if (updatedConfig[propKey] !== sourceValue) {
-                      updatedConfig[propKey] = sourceValue;
-                      nodeChanged = true;
-                  }
-              }
-          });
-          
-          if (nodeChanged) {
-              changed = true;
-              return { ...targetNode, config: updatedConfig };
-          }
-          return targetNode;
-      });
-
-      if (changed) {
-          setNodes(newNodes);
-      }
-  }, [nodes]);
-
   return (
     <div 
       id="canvas-bg"
-      className={`w-full h-screen overflow-hidden select-none relative ${isDarkMode ? 'bg-black text-white' : 'bg-[#F5F5F5] text-neutral-900'}`}
+      className={`w-full h-screen overflow-hidden select-none relative ${snap.isDarkMode ? 'bg-black text-white' : 'bg-[#F5F5F5] text-neutral-900'}`}
       onMouseMove={(e) => {
-          // PANNING
           if (isPanning) {
               const dx = e.clientX - panStartRef.current.mouseX;
               const dy = e.clientY - panStartRef.current.mouseY;
-              setViewport(prev => ({
-                  ...prev,
+              graphActions.setViewport({
+                  ...snap.viewport,
                   x: panStartRef.current.x + dx,
                   y: panStartRef.current.y + dy
-              }));
+              });
           }
-          // DRAGGING NODES
-          if (dragState) {
-              const dx = (e.clientX - dragState.mouseStartX) / viewport.zoom;
-              const dy = (e.clientY - dragState.mouseStartY) / viewport.zoom;
+          if (graphState.dragState) {
+              const dx = (e.clientX - graphState.dragState.mouseStartX) / snap.viewport.zoom;
+              const dy = (e.clientY - graphState.dragState.mouseStartY) / snap.viewport.zoom;
               
-              setNodes(prev => prev.map(n => {
-                  if (dragState.nodeIds.includes(n.id)) {
-                      const start = dragState.startPositions[n.id];
-                      return { ...n, position: { x: start.x + dx, y: start.y + dy } };
+              graphState.dragState.nodeIds.forEach(id => {
+                  const start = graphState.dragState!.startPositions[id];
+                  const node = graphState.nodes.find(n => n.id === id);
+                  if (node) {
+                      node.position.x = start.x + dx;
+                      node.position.y = start.y + dy;
                   }
-                  return n;
-              }));
+              });
           }
-          // WIRING
           if (tempWire) {
-              const worldPos = screenToWorld(e.clientX, e.clientY);
-              setTempWire(prev => prev ? { ...prev, mouseX: worldPos.x, mouseY: worldPos.y } : null);
+              const { x, y, zoom } = graphState.viewport;
+              setTempWire(prev => prev ? { ...prev, mouseX: (e.clientX - x)/zoom, mouseY: (e.clientY - y)/zoom } : null);
           }
       }}
       onMouseUp={(e) => {
           if (isPanning) {
              const dist = Math.sqrt(Math.pow(e.clientX - panStartRef.current.mouseX, 2) + Math.pow(e.clientY - panStartRef.current.mouseY, 2));
-             if (dist < 5) setSelectedIds(new Set());
+             if (dist < 5) graphActions.clearSelection();
           }
           setIsPanning(false);
           
-          if (dragState) {
-              // Snap all dragged nodes
-              const newNodes = nodes.map(n => {
-                  if (dragState.nodeIds.includes(n.id)) {
-                      return { 
-                          ...n, 
-                          position: { 
-                              x: Math.round(n.position.x / SNAP_SIZE) * SNAP_SIZE, 
-                              y: Math.round(n.position.y / SNAP_SIZE) * SNAP_SIZE 
-                          } 
-                      };
-                  }
-                  return n;
+          if (graphState.dragState) {
+              graphState.dragState.nodeIds.forEach(id => {
+                 const node = graphState.nodes.find(n => n.id === id);
+                 if (node) {
+                     node.position.x = Math.round(node.position.x / SNAP_SIZE) * SNAP_SIZE;
+                     node.position.y = Math.round(node.position.y / SNAP_SIZE) * SNAP_SIZE;
+                 }
               });
-              setNodes(newNodes);
-              pushHistory(newNodes, connections);
-              setDragState(null);
+              graphActions.pushHistory();
+              graphState.dragState = null;
           }
           if (tempWire && !tempWire.isHot) setTempWire(null);
       }}
       onWheel={(e) => {
-        // Don't zoom if node picker is open
         if (isNodePickerOpen) return;
-        
-        if (e.shiftKey) { setViewport(prev => ({ ...prev, x: prev.x - e.deltaY, y: prev.y - e.deltaX })); return; }
+        if (e.shiftKey) { 
+            graphActions.setViewport({ ...snap.viewport, x: snap.viewport.x - e.deltaY, y: snap.viewport.y - e.deltaX }); 
+            return; 
+        }
         const zoomSensitivity = 0.001;
         const delta = -e.deltaY * zoomSensitivity;
-        const newZoom = Math.min(Math.max(viewport.zoom + delta, 0.2), 3);
-        const worldX = (e.clientX - viewport.x) / viewport.zoom;
-        const worldY = (e.clientY - viewport.y) / viewport.zoom;
+        const newZoom = Math.min(Math.max(snap.viewport.zoom + delta, 0.2), 3);
+        const worldX = (e.clientX - snap.viewport.x) / snap.viewport.zoom;
+        const worldY = (e.clientY - snap.viewport.y) / snap.viewport.zoom;
         const newX = e.clientX - worldX * newZoom;
         const newY = e.clientY - worldY * newZoom;
-        setViewport({ x: newX, y: newY, zoom: newZoom });
+        graphActions.setViewport({ x: newX, y: newY, zoom: newZoom });
       }}
       onMouseDown={(e) => {
           setPropertyContextMenu(null);
-          if (!dragState) {
+          if (!graphState.dragState) {
               setIsPanning(true); 
-              panStartRef.current = { x: viewport.x, y: viewport.y, mouseX: e.clientX, mouseY: e.clientY }; 
+              panStartRef.current = { x: snap.viewport.x, y: snap.viewport.y, mouseX: e.clientX, mouseY: e.clientY }; 
           }
       }}
     >
-        {/* GRID BACKGROUND */}
-        <CanvasBackground viewport={viewport} isDarkMode={isDarkMode} gridType={gridType} />
+        <CanvasBackground viewport={snap.viewport} isDarkMode={snap.isDarkMode} gridType={snap.gridType} />
 
-      <div ref={containerRef} className="absolute inset-0 z-10 origin-top-left pointer-events-none" style={{ transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})` }}>
-        {/* WIRES */}
+      <div ref={containerRef} className="absolute inset-0 z-10 origin-top-left pointer-events-none" style={{ transform: `translate(${snap.viewport.x}px, ${snap.viewport.y}px) scale(${snap.viewport.zoom})` }}>
         <svg className="absolute left-0 top-0 overflow-visible pointer-events-none z-10">
             <defs>
-                 <marker id="arrow-head" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill={getWire('default', isDarkMode)} /></marker>
+                 <marker id="arrow-head" markerWidth="6" markerHeight="6" refX="0" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill={getWire('default', snap.isDarkMode)} /></marker>
             </defs>
-            {connections.map(conn => (
+            {snap.connections.map(conn => (
                 <ConnectionLine 
                     key={conn.id}
                     connection={conn}
-                    sourceNode={nodes.find(n => n.id === conn.source)}
-                    targetNode={nodes.find(n => n.id === conn.target)}
-                    viewport={viewport}
-                    isDarkMode={isDarkMode}
+                    sourceNode={snap.nodes.find(n => n.id === conn.source)}
+                    targetNode={snap.nodes.find(n => n.id === conn.target)}
+                    viewport={snap.viewport}
+                    isDarkMode={snap.isDarkMode}
                     onDelete={(id) => {
-                        setConnections(prev => prev.filter(c => c.id !== id));
-                        pushHistory(nodes, connections.filter(c => c.id !== id));
+                        graphActions.removeConnection(id);
+                        graphActions.pushHistory();
                     }}
                 />
             ))}
              {tempWire && (
                 <path 
                   d={`M ${tempWire.startType === 'output' 
-                      ? getNodePosition(tempWire.startId).x + (nodes.find(n => n.id === tempWire.startId)?.dimensions?.width ?? nodeLayout.width) + 16
+                      ? getNodePosition(tempWire.startId).x + (snap.nodes.find(n => n.id === tempWire.startId)?.dimensions?.width ?? nodeLayout.width) + 16
                       : getNodePosition(tempWire.startId).x + portLayout.inputX} ${getNodePosition(tempWire.startId).y + portLayout.offsetY} L ${tempWire.mouseX} ${tempWire.mouseY}`} 
-                  stroke={getWire('temp', isDarkMode)} 
-                  strokeWidth={2 / viewport.zoom} 
+                  stroke={getWire('temp', snap.isDarkMode)} 
+                  strokeWidth={2 / snap.viewport.zoom} 
                   strokeDasharray="5 5" 
                   fill="none" 
                 />
             )}
         </svg>
 
-        {nodes.map(node => (
+        {visibleNodes.map(node => (
             <BaseNode 
                 key={node.id} 
                 data={node}
-                isSelected={selectedIds.has(node.id)}
+                isSelected={snap.selection.has(node.id)}
                 isActiveChain={activeChainIds.has(node.id)}
                 accentColor={nodeColors.get(node.id)}
-                zoom={viewport.zoom}
-                isDarkMode={isDarkMode}
+                zoom={snap.viewport.zoom}
+                isDarkMode={snap.isDarkMode}
                 isHotConnectionSource={tempWire?.startId === node.id}
-                onSelect={(id) => {
-                    // Handled in onNodeDown mostly, but here for click
-                    // If not dragging, this fires.
-                    // But we handle selection in onNodeDown to allow drag-select.
-                }}
-                onToggleCollapse={(id) => setNodes(p => p.map(n => n.id === id ? { ...n, collapsed: !n.collapsed } : n))}
-                onResize={(id, width, height, x, y) => {
-                    setNodes(prev => prev.map(n => {
-                        if (n.id !== id) return n;
-                        const update: any = { dimensions: { width, height } };
-                        if (x !== undefined && y !== undefined) {
-                            update.position = { x, y };
-                        }
-                        return { ...n, ...update };
-                    }));
-                }}
+                onSelect={(id) => { /* Logic is in onNodeDown */ }}
+                onToggleCollapse={graphActions.toggleNodeCollapse}
+                onResize={graphActions.updateNodeDimensions}
                 onPortDown={handlePortDown}
                 onPortUp={handlePortUp}
                 onPortContextMenu={(id, type, e) => { setMenuData({ nodeId: id, type, x: e.clientX, y: e.clientY }); setActiveMenu('DISCONNECT'); }}
@@ -679,133 +473,63 @@ export default function App() {
                     setMenuData({ nodeId: id, type, x: e.clientX, y: e.clientY }); 
                     setActiveMenu('PORT'); 
                 }}
-                onNodeDown={(e) => { 
-                    e.stopPropagation(); 
-                    
-                    let newSelected = new Set(selectedIds);
-                    if (e.shiftKey) {
-                        if (newSelected.has(node.id)) newSelected.delete(node.id);
-                        else newSelected.add(node.id);
-                    } else {
-                        if (!newSelected.has(node.id)) {
-                            newSelected = new Set([node.id]);
-                        }
-                    }
-                    setSelectedIds(newSelected);
-
-                    // Alt+Drag: Duplicate
-                    if (e.altKey) {
-                        const nodesToDuplicate = nodes.filter(n => newSelected.has(n.id));
-                        const newNodes: NodeData[] = [];
-                        const idMap = new Map<string, string>();
-
-                        nodesToDuplicate.forEach(n => {
-                            const newId = `n_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                            idMap.set(n.id, newId);
-                            newNodes.push({
-                                ...n,
-                                id: newId,
-                                label: n.label + ' (Copy)',
-                                position: { x: n.position.x + 50, y: n.position.y + 50 },
-                                boundProps: { ...n.boundProps },
-                                dimensions: n.dimensions ? { ...n.dimensions } : undefined
-                            });
-                        });
-
-                        const updatedNodes = [...nodes, ...newNodes];
-                        setNodes(updatedNodes);
-                        
-                        // Copy INPUT connections for duplicated nodes
-                        const newConns: Connection[] = [];
-                        nodesToDuplicate.forEach(n => {
-                            const inputs = connections.filter(c => c.target === n.id);
-                            inputs.forEach(c => {
-                                newConns.push({
-                                    ...c,
-                                    id: `c_${Date.now()}_${Math.random()}`,
-                                    target: idMap.get(n.id)!
-                                });
-                            });
-                        });
-                        
-                        const updatedConns = [...connections, ...newConns];
-                        setConnections(updatedConns);
-                        pushHistory(updatedNodes, updatedConns);
-
-                        const newSelection = new Set(newNodes.map(n => n.id));
-                        setSelectedIds(newSelection);
-
-                        // Start Dragging New Nodes
-                        const startPositions: Record<string, {x: number, y: number}> = {};
-                        newNodes.forEach(n => startPositions[n.id] = { x: n.position.x, y: n.position.y });
-                        setDragState({ nodeIds: Array.from(newSelection), startPositions, mouseStartX: e.clientX, mouseStartY: e.clientY });
-
-                    } else {
-                        // Start Dragging Selected Nodes
-                        const startPositions: Record<string, {x: number, y: number}> = {};
-                        nodes.filter(n => newSelected.has(n.id)).forEach(n => startPositions[n.id] = { x: n.position.x, y: n.position.y });
-                        setDragState({ nodeIds: Array.from(newSelected), startPositions, mouseStartX: e.clientX, mouseStartY: e.clientY });
-                    }
-                }}
-            >
-                <NodeContent 
-                    node={node} 
-                    isDarkMode={isDarkMode} 
-                    updateConfig={(key, val) => {
-                        const newNodes = nodes.map(n => n.id === node.id ? { ...n, config: { ...n.config, [key]: val } } : n);
-                        setNodes(newNodes);
-                    }}
-                    pushHistory={() => pushHistory(nodes, connections)}
-                />
-            </BaseNode>
+                onNodeDown={handleNodeDown}
+                updateConfig={graphActions.updateNodeConfig}
+                pushHistory={graphActions.pushHistory}
+                onPropertyContextMenu={handlePropertyContextMenu}
+            />
         ))}
       </div>
       
-      {/* SIDE PANEL */}
       <SidePanel 
-          selectedNode={selectedIds.size === 1 ? nodes.find(n => n.id === Array.from(selectedIds)[0]) || null : null}
-          onClose={() => setSelectedIds(new Set())}
+          selectedNode={snap.selection.size === 1 ? snap.nodes.find(n => n.id === Array.from(snap.selection)[0]) || null : null}
+          onClose={graphActions.clearSelection}
           onUpdate={(id, newData) => {
-              const newNodes = nodes.map(n => n.id === id ? { ...n, ...newData } : n);
-              setNodes(newNodes);
-              pushHistory(newNodes, connections);
+              const node = graphState.nodes.find(n => n.id === id);
+              if (node) {
+                  Object.assign(node, newData);
+                  graphActions.pushHistory();
+              }
           }}
           onBindProp={handleBindProp}
-          isDarkMode={isDarkMode}
-          boundProps={selectedIds.size === 1 ? nodes.find(n => n.id === Array.from(selectedIds)[0])?.boundProps || {} : {}}
+          isDarkMode={snap.isDarkMode}
+          boundProps={snap.selection.size === 1 ? snap.nodes.find(n => n.id === Array.from(snap.selection)[0])?.boundProps || {} : {}}
           onContextMenu={(menu) => setPropertyContextMenu(menu)}
       />
 
-      {/* UI HEADER */}
       <Header 
-        isDarkMode={isDarkMode}
-        setIsDarkMode={setIsDarkMode}
-        gridType={gridType}
-        setGridType={setGridType}
-        historyIndex={historyIndex}
-        historyLength={history.length}
+        isDarkMode={snap.isDarkMode}
+        setIsDarkMode={graphActions.toggleDarkMode}
+        gridType={snap.gridType}
+        setGridType={graphActions.setGridType}
+        historyIndex={snap.historyIndex}
+        historyLength={snap.history.length}
         handleUndo={handleUndo}
         handleRedo={handleRedo}
         setIsNodePickerOpen={setIsNodePickerOpen}
         setPickerCounts={setPickerCounts}
       />
 
-      {/* COMMAND LEGEND */}
-      <ShortcutsPanel isDarkMode={isDarkMode} />
+      <ShortcutsPanel isDarkMode={snap.isDarkMode} />
 
-      {/* NODE PICKER MODAL */}
       <NodePicker 
         isOpen={isNodePickerOpen}
         onClose={() => setIsNodePickerOpen(false)}
-        isDarkMode={isDarkMode}
+        isDarkMode={snap.isDarkMode}
         pickerCounts={pickerCounts}
         setPickerCounts={setPickerCounts}
-        onAdd={handleNodePickerAdd}
+        onAdd={() => {
+             const startX = -snap.viewport.x + 100;
+             const startY = -snap.viewport.y + 100;
+             Object.entries(pickerCounts).forEach(([type, count]) => {
+                 for(let i=0; i<(count as number); i++) addNode(type as NodeType, startX, startY);
+             });
+             setIsNodePickerOpen(false);
+        }}
         onSingleAdd={addNode}
       />
       
-      {/* MENUS */}
-      {activeMenu === 'PORT' && menuData && (
+       {activeMenu === 'PORT' && menuData && (
           <div 
             className="fixed w-48 bg-black border border-neutral-800 rounded-lg shadow-xl" 
             style={{ left: menuData.x, top: menuData.y, zIndex: zIndex.contextMenu }} 
@@ -813,33 +537,21 @@ export default function App() {
           >
               {Object.values(NodeType)
                 .filter(type => {
-                    // Filter logic:
-                    // If source is Output, target must have Input.
-                    // If source is Input, target must have Output.
-                    if (menuData.type === 'output') {
-                        // Exclude generators that typically don't have inputs (Picker, Oscillator, Slider, Number, Boolean)
-                        // Include Transform, Logic, Output
-                        return [NodeType.TRANSFORM, NodeType.LOGIC, NodeType.OUTPUT].includes(type);
-                    } else {
-                        // Exclude Output node (no output)
-                        return type !== NodeType.OUTPUT;
-                    }
+                    if (menuData.type === 'output') return [NodeType.TRANSFORM, NodeType.LOGIC, NodeType.OUTPUT].includes(type);
+                    else return type !== NodeType.OUTPUT;
                 })
                 .map(type => (
                   <button key={type} className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => { 
                       const pos = getNodePosition(menuData.nodeId); 
-                      // Place to Right if Output, Left if Input
                       const offset = menuData.type === 'output' ? 300 : -300;
                       const newNode = addNode(type, pos.x + offset, pos.y); 
-                      
-                      const newConns = [...connections, { 
+                      graphActions.addConnection({ 
                           id: `c_${Date.now()}`, 
                           source: menuData.type === 'output' ? menuData.nodeId : newNode.id, 
                           target: menuData.type === 'output' ? newNode.id : menuData.nodeId, 
                           type: ConnectionType.BEZIER 
-                      }];
-                      setConnections(newConns);
-                      pushHistory(nodes, newConns);
+                      });
+                      graphActions.pushHistory();
                       setActiveMenu(null);
                   }}>
                       {getTypeLabel(type)}
@@ -857,9 +569,8 @@ export default function App() {
               <div className="px-4 py-2 text-xs font-bold text-neutral-500 border-b border-neutral-800">Connection Type</div>
               {Object.values(ConnectionType).map(type => (
                   <button key={type} className="block w-full text-left px-4 py-2 text-xs text-white hover:bg-white/10" onClick={() => {
-                      const newConns = [...connections, { id: `c_${Date.now()}`, source: menuData.source, target: menuData.target, type }];
-                      setConnections(newConns);
-                      pushHistory(nodes, newConns);
+                      graphActions.addConnection({ id: `c_${Date.now()}`, source: menuData.source, target: menuData.target, type });
+                      graphActions.pushHistory();
                       setActiveMenu(null);
                   }}>
                       {type}
@@ -875,9 +586,8 @@ export default function App() {
             onMouseDown={e => e.stopPropagation()}
           >
               <button className="block w-full text-left px-4 py-2 text-xs text-red-500 hover:bg-white/10" onClick={() => {
-                  const newConns = connections.filter(c => !(c.target === menuData.nodeId && menuData.type === 'input') && !(c.source === menuData.nodeId && menuData.type === 'output'));
-                  setConnections(newConns);
-                  pushHistory(nodes, newConns);
+                  graphState.connections = graphState.connections.filter(c => !(c.target === menuData.nodeId && menuData.type === 'input') && !(c.source === menuData.nodeId && menuData.type === 'output'));
+                  graphActions.pushHistory();
                   setActiveMenu(null);
               }}>
                   Disconnect All
@@ -885,13 +595,10 @@ export default function App() {
           </div>
       )}
 
-      {/* PROPERTY TELEPORT MENU */}
       {propertyContextMenu && (() => {
-          // Calculate safe menu position
-          const menuWidth = 224; // w-56 = 14rem = 224px
-          const menuHeight = propertyTeleportBuffer 
-              ? (nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] ? 200 : 170)
-              : (nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] ? 130 : 100);
+          const menuWidth = 224;
+          const isBound = snap.nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey];
+          const menuHeight = propertyTeleportBuffer ? (isBound ? 200 : 170) : (isBound ? 130 : 100);
           const safePos = getMenuPosition(propertyContextMenu.x, propertyContextMenu.y, menuWidth, menuHeight);
           
           return (
@@ -910,11 +617,11 @@ export default function App() {
                           <LinkIcon size={14} className="text-green-500" />
                           <div className="flex flex-col">
                               <span>Receive <span className="text-green-500 font-bold">{propertyTeleportBuffer.propKey}</span></span>
-                              <span className="text-[10px] text-neutral-500">from <span className="text-neutral-400">{nodes.find(n => n.id === propertyTeleportBuffer.nodeId)?.label}</span></span>
+                              <span className="text-[10px] text-neutral-500">from <span className="text-neutral-400">{snap.nodes.find(n => n.id === propertyTeleportBuffer.nodeId)?.label}</span></span>
                           </div>
                       </button>
                   )}
-                  {nodes.find(n => n.id === propertyContextMenu.nodeId)?.boundProps?.[propertyContextMenu.propKey] && (
+                  {isBound && (
                        <button className="flex items-center gap-2 w-full text-left px-4 py-2.5 text-xs text-red-500 hover:bg-white/10 transition-colors border-t border-neutral-800/50" onClick={() => { handleBindProp(propertyContextMenu.nodeId, propertyContextMenu.propKey, 'UNBIND'); setPropertyContextMenu(null); }}>
                           <Unlink size={14} />
                           <span>Unbind <span className="font-bold">{propertyContextMenu.propKey}</span></span>

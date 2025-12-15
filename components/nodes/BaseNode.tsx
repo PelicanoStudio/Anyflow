@@ -1,7 +1,9 @@
 
 import React from 'react';
+import { NodeContent } from './NodeContent';
 import { NodeData, NodeType } from '../../types';
 import { ChevronDown, ChevronUp, GripHorizontal, Activity, Image as ImageIcon, Box, Monitor, Cpu, Sliders, Hash, ToggleLeft, Copy } from 'lucide-react';
+import { getTypeLabel } from '../../src/utils/nodeUtils';
 import { 
   signalActive, 
   getBorder, 
@@ -30,10 +32,13 @@ interface BaseNodeProps {
   onPortContextMenu?: (id: string, type: 'input' | 'output', e: React.MouseEvent) => void;
   onPortDoubleClick?: (id: string, type: 'input' | 'output', e: React.MouseEvent) => void;
   // Node Drag Handler
-  onNodeDown: (e: React.MouseEvent) => void;
+  onNodeDown: (id: string, e: React.MouseEvent) => void;
   // Node Resize Handler
-  onResize?: (id: string, width: number, height: number) => void;
-  children: React.ReactNode;
+  onResize?: (id: string, width: number, height: number, x?: number, y?: number) => void;
+  // Content Handlers
+  updateConfig: (id: string, key: string, val: any) => void;
+  pushHistory: () => void;
+  onPropertyContextMenu?: (nodeId: string, propKey: string, x: number, y: number) => void;
 }
 
 const getNodeIcon = (type: NodeType) => {
@@ -52,19 +57,7 @@ const getNodeIcon = (type: NodeType) => {
   }
 };
 
-export const getTypeLabel = (type: NodeType) => {
-    switch(type) {
-        case NodeType.OSCILLATOR: return "LFO";
-        case NodeType.TRANSFORM: return "MODIFIER";
-        case NodeType.SLIDER: return "SLIDER";
-        case NodeType.NUMBER: return "VALUE";
-        case NodeType.BOOLEAN: return "SWITCH";
-        case NodeType.CLONE: return "INSTANCE";
-        default: return type;
-    }
-}
-
-export const BaseNode: React.FC<BaseNodeProps> = ({ 
+export const BaseNode = React.memo<BaseNodeProps>(({ 
   data, 
   isSelected, 
   isActiveChain,
@@ -79,8 +72,11 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   onPortContextMenu,
   onPortDoubleClick,
   onNodeDown,
+
   onResize,
-  children 
+  updateConfig,
+  pushHistory,
+  onPropertyContextMenu
 }) => {
   
   // Visual Logic
@@ -114,9 +110,6 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   const styleHeight = data.dimensions?.height || 'auto';
 
   // Resize Handler Logic
-  // Resize is triggered from 4 invisible corner areas
-  // Alt key: Resize from center
-  // Shift key (implicit in requirements): Proportional/Aspect Ratio lock is DEFAULT
   const handleResizeStart = (corner: 'nw' | 'ne' | 'sw' | 'se') => (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -142,10 +135,6 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
       let newX = startPosX;
       let newY = startPosY;
 
-      // Calculate raw new dimensions based on corner
-      // Proportional resizing is ENFORCED (Locked Ratio)
-      // We use the dominant axis (larger delta) to drive the scaling
-      
       // Determine dominant delta based on corner direction
       // Defaulting to width-driven scaling for stability, or X-axis driven
       let scaleFactor = 1;
@@ -171,23 +160,18 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
       // Position adjustments
       if (scaleFromCenter) {
           // Center scaling: Position shifts to keep center constant
-          // Width grew by (newWidth - startWidth), so move X by half that diff * -1
           const widthDiff = newWidth - startWidth;
           const heightDiff = newHeight - startHeight;
           newX = startPosX - (widthDiff / 2);
           newY = startPosY - (heightDiff / 2);
       } else {
           // Corner scaling: Anchor opposite corner
-          // If dragging SE, Top-Left (x,y) stays same.
-          // If dragging SW, Right edge stays same -> X moves by deltaWidth
-          // If dragging NE, Bottom edge stays same -> Y moves by deltaHeight (but Y is top...)
-          // Wait, simple logic:
-          // X/Y change only if dragging Left or Top sides
-          
           if (corner === 'sw' || corner === 'nw') {
               newX = startPosX + (startWidth - newWidth);
           }
           if (corner === 'ne' || corner === 'nw') {
+              // Note: this logic is simplified, works best if origin is TopLeft. 
+              // React render update will reposition.
               newY = startPosY + (startHeight - newHeight);
           }
       }
@@ -226,29 +210,25 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
         onSelect(data.id);
       }}
       onMouseDown={(e) => {
-        onNodeDown(e);
+        onNodeDown(data.id, e);
       }}
     >
       {/* Invisible Resize Handles (Corners) */}
-      {/* SE */}
       <div 
         className="absolute bottom-0 right-0 z-50 cursor-nwse-resize"
         style={{ width: resizeHitboxSize, height: resizeHitboxSize }}
         onMouseDown={handleResizeStart('se')}
       />
-      {/* SW */}
       <div 
         className="absolute bottom-0 left-0 z-50 cursor-nesw-resize"
         style={{ width: resizeHitboxSize, height: resizeHitboxSize }}
         onMouseDown={handleResizeStart('sw')}
       />
-      {/* NE */}
       <div 
         className="absolute top-0 right-0 z-50 cursor-nesw-resize"
         style={{ width: resizeHitboxSize, height: resizeHitboxSize }}
         onMouseDown={handleResizeStart('ne')}
       />
-      {/* NW */}
       <div 
         className="absolute top-0 left-0 z-50 cursor-nwse-resize"
         style={{ width: resizeHitboxSize, height: resizeHitboxSize }}
@@ -260,8 +240,8 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
         <div 
             className="absolute z-50 group/port flex items-center justify-center cursor-crosshair"
             style={{ 
-                left: -portLayout.offsetX, // Use token
-                top: portLayout.offsetY - 12, // Center vertically roughly
+                left: -portLayout.offsetX, 
+                top: portLayout.offsetY - 12, 
                 width: portLayout.hitboxSize,
                 height: portLayout.hitboxSize
             }}
@@ -269,7 +249,6 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
                 e.stopPropagation(); e.preventDefault();
                 onPortDown(data.id, 'input', e);
             }}
-
             onMouseUp={(e) => {
                 e.stopPropagation(); e.preventDefault();
                 onPortUp(data.id, 'input', e);
@@ -303,7 +282,7 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
          <div 
             className="absolute z-50 group/port flex items-center justify-center cursor-crosshair"
             style={{ 
-                right: -portLayout.offsetX, // Use token
+                right: -portLayout.offsetX, 
                 top: portLayout.offsetY - 12, 
                 width: portLayout.hitboxSize,
                 height: portLayout.hitboxSize
@@ -368,13 +347,13 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
       {/* Body */}
       {!data.collapsed && (
         <div className="p-3 flex-1 min-h-0 overflow-auto flex flex-col">
-          {React.Children.map(children, child => {
-              if (React.isValidElement(child)) {
-                  // @ts-ignore
-                  return React.cloneElement(child, { isDarkMode, accentColor });
-              }
-              return child;
-          })}
+            <NodeContent 
+                node={data}
+                isDarkMode={isDarkMode}
+                updateConfig={(key, val) => updateConfig(data.id, key, val)}
+                pushHistory={pushHistory}
+                onPropertyContextMenu={onPropertyContextMenu}
+            />
         </div>
       )}
       
@@ -385,4 +364,4 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
       )}
     </div>
   );
-};
+});

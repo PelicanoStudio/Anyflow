@@ -33,7 +33,7 @@ export interface NodeData {
   value?: any; 
   config: Record<string, any>;
   // Property Teleportation Bindings
-  boundProps?: Record<string, { targetNodeId: string, targetProp: string }>;
+  boundProps?: Record<string, { targetNodeId: string, targetProp: string, originalValue?: any }>;
   // Dimensions for resizable nodes
   dimensions?: { width: number; height: number };
 }
