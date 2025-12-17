@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { visualizerThrottle, QualityTier, isFeatureEnabled } from '../../src/tokens';
 
 interface VisualizerProps {
   type: 'sine' | 'square' | 'noise';
@@ -6,9 +7,22 @@ interface VisualizerProps {
   amplitude: number;
   active: boolean;
   isDarkMode: boolean;
+  // Performance props
+  paused?: boolean;
+  throttleMs?: number;
+  qualityTier?: QualityTier;
 }
 
-export const Visualizer: React.FC<VisualizerProps> = ({ type, frequency, amplitude, active, isDarkMode }) => {
+export const Visualizer: React.FC<VisualizerProps> = ({ 
+  type, 
+  frequency, 
+  amplitude, 
+  active, 
+  isDarkMode,
+  paused = false,
+  throttleMs,
+  qualityTier = QualityTier.HIGH
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -20,24 +34,66 @@ export const Visualizer: React.FC<VisualizerProps> = ({ type, frequency, amplitu
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let animationId: number;
-    let time = 0;
-
-    const resizeCanvas = () => {
+    // Check if waveforms are enabled at current quality tier
+    const waveformsEnabled = isFeatureEnabled(qualityTier, 'waveforms');
+    
+    // If paused or waveforms disabled, draw static frame and exit
+    if (paused || !waveformsEnabled) {
+      // Draw a single static frame
+      const resizeCanvas = () => {
         const { clientWidth, clientHeight } = container;
         canvas.width = clientWidth;
         canvas.height = clientHeight;
+      };
+      resizeCanvas();
+      
+      // Draw placeholder line when paused
+      const width = canvas.width;
+      const height = canvas.height;
+      const centerY = height / 2;
+      
+      ctx.clearRect(0, 0, width, height);
+      ctx.beginPath();
+      ctx.strokeStyle = isDarkMode ? '#333333' : '#E0E0E0';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]); // Dashed line to indicate paused
+      ctx.moveTo(0, centerY);
+      ctx.lineTo(width, centerY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      
+      return; // No animation loop
+    }
+
+    let animationId: number;
+    let time = 0;
+    let lastDrawTime = 0;
+    
+    // Determine frame interval from throttle or token defaults
+    const frameInterval = throttleMs ?? visualizerThrottle.idle;
+
+    const resizeCanvas = () => {
+      const { clientWidth, clientHeight } = container;
+      canvas.width = clientWidth;
+      canvas.height = clientHeight;
     };
 
     const resizeObserver = new ResizeObserver(() => {
-        resizeCanvas();
+      resizeCanvas();
     });
     
     resizeObserver.observe(container);
     resizeCanvas(); // Initial size
 
-    const draw = () => {
+    const draw = (timestamp: number) => {
       if (!ctx || !canvas) return;
+      
+      // Throttle: skip frames if not enough time has passed
+      if (timestamp - lastDrawTime < frameInterval) {
+        animationId = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawTime = timestamp;
       
       const width = canvas.width;
       const height = canvas.height;
@@ -78,7 +134,9 @@ export const Visualizer: React.FC<VisualizerProps> = ({ type, frequency, amplitu
 
       ctx.stroke();
 
-      // Draw active point
+      // Draw active point (only if glow is enabled at quality tier)
+      const glowEnabled = isFeatureEnabled(qualityTier, 'glow');
+      
       if (active) {
         const currentX = width / 2;
         let currentY = centerY;
@@ -95,24 +153,27 @@ export const Visualizer: React.FC<VisualizerProps> = ({ type, frequency, amplitu
         ctx.arc(currentX, currentY, 3, 0, Math.PI * 2);
         ctx.fill();
         
-        // Glow
-        ctx.shadowColor = '#FF1F1F';
-        ctx.shadowBlur = 10;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+        // Glow (only if enabled at quality tier)
+        if (glowEnabled) {
+          ctx.shadowColor = '#FF1F1F';
+          ctx.shadowBlur = 10;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        }
       }
 
       time++;
       animationId = requestAnimationFrame(draw);
     };
 
-    draw();
+    // Start with timestamp
+    animationId = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(animationId);
       resizeObserver.disconnect();
     };
-  }, [type, frequency, amplitude, active, isDarkMode]);
+  }, [type, frequency, amplitude, active, isDarkMode, paused, throttleMs, qualityTier]);
 
   return (
     <div 

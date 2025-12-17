@@ -6,7 +6,8 @@ import {
   nodeLayout, 
   portLayout, 
   wireLayout,
-  getSurface
+  QualityTier,
+  wireSimplification
 } from '../../src/tokens';
 
 interface ConnectionLineProps {
@@ -16,6 +17,8 @@ interface ConnectionLineProps {
   viewport: { x: number; y: number; zoom: number };
   isDarkMode: boolean;
   onDelete: (id: string) => void;
+  // Performance props
+  qualityTier?: QualityTier;
 }
 
 export const ConnectionLine: React.FC<ConnectionLineProps> = ({
@@ -24,9 +27,13 @@ export const ConnectionLine: React.FC<ConnectionLineProps> = ({
   targetNode,
   viewport,
   isDarkMode,
-  onDelete
+  onDelete,
+  qualityTier = QualityTier.HIGH
 }) => {
   if (!sourceNode || !targetNode) return null;
+
+  // Get quality settings for wire rendering
+  const wireQuality = wireSimplification[qualityTier];
 
   const s = sourceNode.position;
   const t = targetNode.position;
@@ -48,8 +55,17 @@ export const ConnectionLine: React.FC<ConnectionLineProps> = ({
   const portY = portLayout.offsetY;    // 40
   const controlOffset = wireLayout.controlPointOffset; // 100
 
+  // At MINIMAL tier, use simplified straight lines for all connection types
+  if (qualityTier === QualityTier.MINIMAL && connection.type !== ConnectionType.STRAIGHT) {
+    // Simple straight line at minimal quality
+    const sx = s.x + outputX;
+    const sy = s.y + portY;
+    const tx = t.x + inputX;
+    const ty = t.y + portY;
+    d = `M ${sx} ${sy} L ${tx} ${ty}`;
+  }
   // Telepathic Arrow
-  if (connection.type === ConnectionType.STRAIGHT) {
+  else if (connection.type === ConnectionType.STRAIGHT) {
       const sWidth = sourceNode?.dimensions?.width || nodeWidth;
       const sHeight = sourceNode?.dimensions?.height || nodeLayout.defaultHeight;
       const tWidth = targetNode?.dimensions?.width || nodeWidth;
@@ -65,7 +81,13 @@ export const ConnectionLine: React.FC<ConnectionLineProps> = ({
       
       d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
       strokeWidth = Math.max(1, 1.5 / viewport.zoom);
-      strokeDash = `${wireLayout.dashGap/viewport.zoom} ${wireLayout.dashGap/viewport.zoom}`;
+      
+      // Only animate dash at higher quality tiers
+      if (wireQuality.animateDash) {
+        strokeDash = `${wireLayout.dashGap/viewport.zoom} ${wireLayout.dashGap/viewport.zoom}`;
+      } else {
+        strokeDash = `${wireLayout.dashGap * 2} ${wireLayout.dashGap * 2}`; // Static larger dash
+      }
       markerEnd = "url(#arrow-head)";
   
   // Orthogonal Step
@@ -79,28 +101,47 @@ export const ConnectionLine: React.FC<ConnectionLineProps> = ({
   
   // Dotted Bezier
   } else if (connection.type === ConnectionType.DOTTED) {
-      d = `M ${s.x + outputX} ${s.y + portY} C ${s.x + outputX + controlOffset} ${s.y + portY} ${t.x + inputX - controlOffset} ${t.y + portY} ${t.x + inputX} ${t.y + portY}`;
-      strokeDash = `${wireLayout.dottedDash/viewport.zoom} ${wireLayout.dottedDash/viewport.zoom}`;
+      // Reduce control point offset at lower quality for flatter curves
+      const qualityControlOffset = qualityTier === QualityTier.LOW 
+        ? controlOffset * 0.5 
+        : controlOffset;
+      
+      d = `M ${s.x + outputX} ${s.y + portY} C ${s.x + outputX + qualityControlOffset} ${s.y + portY} ${t.x + inputX - qualityControlOffset} ${t.y + portY} ${t.x + inputX} ${t.y + portY}`;
+      
+      if (wireQuality.animateDash) {
+        strokeDash = `${wireLayout.dottedDash/viewport.zoom} ${wireLayout.dottedDash/viewport.zoom}`;
+      } else {
+        strokeDash = `${wireLayout.dottedDash * 2} ${wireLayout.dottedDash * 2}`; // Static larger dash
+      }
   
   // Default & Double
   } else {
-      d = `M ${s.x + outputX} ${s.y + portY} C ${s.x + outputX + controlOffset} ${s.y + portY} ${t.x + inputX - controlOffset} ${t.y + portY} ${t.x + inputX} ${t.y + portY}`;
+      // Reduce control point offset at lower quality for flatter curves
+      const qualityControlOffset = qualityTier === QualityTier.LOW 
+        ? controlOffset * 0.5 
+        : controlOffset;
+      
+      d = `M ${s.x + outputX} ${s.y + portY} C ${s.x + outputX + qualityControlOffset} ${s.y + portY} ${t.x + inputX - qualityControlOffset} ${t.y + portY} ${t.x + inputX} ${t.y + portY}`;
   }
 
   const isDouble = connection.type === ConnectionType.DOUBLE;
+  // Only render double wire gap at higher quality tiers
+  const renderDoubleGap = isDouble && wireQuality.renderDoubleGap;
 
   return (
       <g>
           <path d={d} stroke="transparent" strokeWidth={wireLayout.hitboxWidth / viewport.zoom} fill="none" className="pointer-events-auto cursor-pointer" onClick={(e) => { if(e.altKey) onDelete(connection.id); }} />
-          {isDouble ? (
+          {renderDoubleGap ? (
               <>
                   <path d={d} stroke={strokeColor} strokeWidth={strokeWidth * 3} fill="none" strokeLinecap="round" className="pointer-events-none" />
                   <path d={d} stroke={getWire('doubleInner', isDarkMode)} strokeWidth={strokeWidth} fill="none" strokeLinecap="round" className="pointer-events-none" />
               </>
+          ) : isDouble ? (
+              // Simplified double at low quality - just thicker line
+              <path d={d} stroke={strokeColor} strokeWidth={strokeWidth * 2} fill="none" strokeLinecap="round" className="pointer-events-none" />
           ) : (
               <path d={d} stroke={strokeColor} strokeWidth={strokeWidth} fill="none" strokeDasharray={strokeDash} markerEnd={markerEnd} strokeLinecap="round" className="pointer-events-none" />
           )}
       </g>
   );
 };
-

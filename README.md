@@ -1,46 +1,116 @@
 # Aninode Design System
 
-A high-fidelity, node-based UI library designed for next-generation animation engines. This system features an "OLED Black" aesthetic, infinite canvas navigation, and a robust signal flow visualization engine. **Now with full touch and mobile support!**
+A high-fidelity, fully tokenized UI library designed for next-generation animation engines. This system features an OLED aesthetic, infinite canvas navigation, and a robust signal flow visualization engine. All values are parameterized through a comprehensive token system, enabling cascading updates across the entire UI with zero magic numbers.
 
-## 🏗️ Architecture
+## Architecture
+
+### Design Principles
+
+- **Zero Magic Numbers**: Every visual value (colors, spacing, timing) comes from imported token files
+- **Single Source of Truth**: `theme.tokens.ts` aggregates all tokens for unified access
+- **Dark/Light Mode Support**: All color tokens support automatic theme switching via helper functions
+- **Cascading Updates**: Change a token once, all consumers update automatically
+- **Type Safety**: Full TypeScript coverage with strongly-typed interfaces and enums
 
 ### Modular Structure
 
-The codebase has been refactored into a clean, maintainable architecture optimized for library packaging:
-
 ```
 aninode-design-system/
+├── src/
+│   └── tokens/                  # Design Token System
+│       ├── index.ts             # Barrel export (clean public API)
+│       ├── theme.tokens.ts      # Master theme object
+│       ├── colors.ts            # OLED color palette
+│       ├── layout.ts            # Dimensions, z-index, spacing
+│       ├── animation.ts         # GSAP durations, easing, springs
+│       ├── shortcuts.ts         # Keyboard shortcuts + value conversion
+│       └── connections.ts       # Wire semantics
 ├── components/
-│   ├── canvas/           # Canvas-related components
-│   │   ├── CanvasBackground.tsx
-│   │   └── ConnectionLine.tsx
-│   ├── nodes/            # Node components
-│   │   ├── BaseNode.tsx
-│   │   ├── NodeContent.tsx
-│   │   └── Visualizer.tsx
-│   ├── ui/               # UI components
-│   │   ├── Header.tsx
-│   │   ├── NodePicker.tsx
-│   │   ├── ShortcutsPanel.tsx
-│   │   └── Input.tsx
-│   └── SidePanel.tsx     # Property inspector
-├── hooks/                # Custom React hooks
-│   ├── usePinchZoom.ts  # Touch gesture support
-│   └── useLongPress.ts  # Long-press detection
-├── utils/                # Utility functions
-│   ├── deviceDetection.ts
-│   └── geometry.ts
-├── constants.ts          # App-wide constants
-├── types.ts              # TypeScript definitions
-└── App.tsx               # Main orchestrator
+│   ├── canvas/                  # Canvas-related components
+│   │   ├── CanvasBackground.tsx # Adaptive grid (Dots/Lines/Cross)
+│   │   └── ConnectionLine.tsx   # Wire rendering (5 types)
+│   ├── nodes/                   # Node components
+│   │   ├── BaseNode.tsx         # Base node with ports, resize
+│   │   ├── NodeContent.tsx      # Type-specific UI rendering
+│   │   └── Visualizer.tsx       # 60fps canvas waveforms
+│   ├── ui/                      # UI components
+│   │   ├── Header.tsx           # Theme, grid, history controls
+│   │   ├── NodePicker.tsx       # Node creation modal
+│   │   ├── ShortcutsPanel.tsx   # Keyboard shortcut legend
+│   │   └── Input.tsx            # Reusable input component
+│   └── SidePanel.tsx            # Property inspector
+├── hooks/                       # Custom React hooks
+│   ├── usePinchZoom.ts          # Two-finger pinch gesture
+│   └── useLongPress.ts          # Long-press detection (mobile)
+├── utils/                       # Utility functions
+│   ├── deviceDetection.ts       # UA-based mobile/tablet detection
+│   ├── geometry.ts              # Position calculations
+│   └── menuPosition.ts          # Safe context menu positioning
+├── types.ts                     # TypeScript definitions
+└── App.tsx                      # Main orchestrator
 ```
 
-### Key Design Principles
+## Token System
 
-- **Separation of Concerns**: Canvas logic, UI components, and business logic are cleanly separated
-- **Reusability**: All components are self-contained and reusable
-- **Type Safety**: Full TypeScript coverage for all components
-- **Hook-based Logic**: Custom hooks encapsulate complex interactions (pinch-zoom, long-press)
+All visual values flow through the token system. This ensures consistent styling and enables theme customization.
+
+### Token Modules
+
+| Module            | Purpose                                  | Key Exports                                                                                          |
+| :---------------- | :--------------------------------------- | :--------------------------------------------------------------------------------------------------- |
+| `colors.ts`       | OLED color palette with dark/light modes | `getSurface`, `getBorder`, `getPort`, `getWire`, `getGrid`, `getText`, `signalActive`, `neonPalette` |
+| `layout.ts`       | Dimensions, z-index, spacing constants   | `nodeLayout`, `portLayout`, `wireLayout`, `canvasLayout`, `panelLayout`, `zIndex`, `iconSizes`       |
+| `animation.ts`    | GSAP-compatible timing tokens            | `duration`, `easing`, `cssEasing`, `spring`, `delay`, `glow`                                         |
+| `shortcuts.ts`    | Keyboard shortcuts + value conversion    | `shortcuts`, `formatShortcut`, `valueConversion`                                                     |
+| `connections.ts`  | Wire type semantics and validation       | `connectionRules`, `suggestConnectionType`, `validateConnectionType`                                 |
+| `theme.tokens.ts` | Master theme aggregator                  | `theme`, `getThemeColors`, `getLayout`, `getAnimation`                                               |
+
+### Usage Pattern
+
+```typescript
+// Import from barrel export
+import {
+  getSurface,
+  getBorder,
+  nodeLayout,
+  zIndex,
+  getThemeColors,
+} from "@/src/tokens";
+
+// Use in components
+const backgroundColor = getSurface("node", isDarkMode);
+const borderColor = getBorder("default", isDarkMode);
+const width = nodeLayout.width; // 256
+
+// Or get complete theme object
+const colors = getThemeColors(isDarkMode);
+// colors.surface.node, colors.border.default, etc.
+```
+
+### Layout Constants
+
+| Category | Token                 | Value     |
+| :------- | :-------------------- | :-------- |
+| Node     | `width`               | 256px     |
+| Node     | `defaultHeight`       | 128px     |
+| Node     | `headerHeight`        | 48px      |
+| Node     | `borderRadius`        | 12px      |
+| Port     | `size`                | 12px      |
+| Port     | `hitboxSize`          | 24px      |
+| Canvas   | `snapSize`            | 20px      |
+| Canvas   | `zoomMin` / `zoomMax` | 0.2 / 3.0 |
+| Panel    | `sidePanelWidth`      | 320px     |
+| Panel    | `headerHeight`        | 56px      |
+
+### Animation Durations
+
+| Token      | Value | Use Case         |
+| :--------- | :---- | :--------------- |
+| `instant`  | 0.1s  | Hover states     |
+| `fast`     | 0.2s  | Buttons, toggles |
+| `normal`   | 0.3s  | Panels, menus    |
+| `slow`     | 0.5s  | Modals           |
+| `verySlow` | 0.8s  | Page transitions |
 
 ## Key Features
 
@@ -48,109 +118,142 @@ aninode-design-system/
 
 - **Node-Based Workflow**: Modular components for procedural generation and signal processing
 - **Infinite Canvas**: Physics-based panning and zooming with infinite workspace
-- **Telepathic Connections**: Property-to-property binding system allowing values to be transmitted wirelessly between nodes
+- **Inverse Scaling**: UI elements maintain consistent stroke weights regardless of zoom level
 - **Signal Flow Visualization**: Dynamic highlighting of upstream and downstream signal chains
-- **Touch & Mobile Support**: Full support for touch gestures including pinch-to-zoom and long-press interactions
+
+### Node Types
+
+| Type         | Purpose                 | Teleportable Properties  |
+| :----------- | :---------------------- | :----------------------- |
+| `PICKER`     | Asset/color selection   | -                        |
+| `OSCILLATOR` | Waveform generation     | frequency, amplitude     |
+| `TRANSFORM`  | Position/rotation/scale | All transform properties |
+| `OUTPUT`     | Final output sink       | -                        |
+| `LOGIC`      | Conditional logic       | -                        |
+| `SLIDER`     | Numeric value (range)   | `value`                  |
+| `NUMBER`     | Numeric input           | `value`                  |
+| `BOOLEAN`    | On/Off toggle           | `enabled`                |
+| `CLONE`      | Linked instance         | -                        |
 
 ### Wiring & Connections
 
-- **Smart Connection System**: Bi-directional wiring (Input-to-Output or Output-to-Input) with automatic compatibility filtering
-- **Hot Wire Mode**: `Shift + Click` on any port (or tap on mobile) to activate "hot wire" mode for quick connections
-- **Cable Types**:
-  - **Bezier**: Standard smooth curve for continuous signals
-  - **Straight (Telepathic)**: Direct visual link for bound properties
-  - **Step**: Orthogonal routing for logic paths
-  - **Double**: Dual-strand rendering for complex data types, utilizing a gap-masking technique for visual clarity
-  - **Dotted**: Auxiliary control signals
-- **Connection Logic**:
-  - **One-to-One Restriction**: Prevents duplicate connections between the same ports
-  - **Automatic Type Conversion**: Boolean (0/1) and normalized decimal (0.0-1.0) values are automatically converted to percentages (0-100%) when connected to compatible fields (e.g., Sliders, Transform Scale)
+The connection system supports five semantically distinct wire types:
 
-### Mobile & Touch Support
+| Type         | Visual          | Semantic              | Use Case                        |
+| :----------- | :-------------- | :-------------------- | :------------------------------ |
+| **Bezier**   | Smooth curve    | Single parameter flow | Standard value connections      |
+| **Double**   | Thick pipe      | List/Array data       | Batch data, object lists        |
+| **Dotted**   | Dashed animated | Live/Stream           | LFO signals, real-time feeds    |
+| **Step**     | Orthogonal      | Logic/Boolean         | If/else triggers, state changes |
+| **Straight** | Dashed arrow    | Telepathic/Wireless   | Remote property binding         |
 
-- **Device Detection**: Automatically detects mobile/tablet devices without relying on screen size
-- **Pinch-to-Zoom**: Native two-finger pinch gesture support for zoom control
-- **Tap-to-Connect**: Single tap on ports activates hot wire mode on mobile devices
-- **Long-Press Teleportation**: Hold any property field to open the teleportation menu (replaces right-click on desktop)
-- **Touch-Optimized UI**: All interactive elements support both mouse and touch events
+**Connection Features:**
+
+- Bi-directional wiring (Input-to-Output or Output-to-Input)
+- Hot Wire Mode: `Shift + Click` on any port to activate quick connection mode
+- One-to-One Restriction: Prevents duplicate connections between same ports
+- Automatic Type Conversion: Boolean (0/1) and normalized decimals (0.0-1.0) convert to percentages automatically
 
 ### Property Teleportation
 
-- **Wireless Property Binding**: Right-click (or long-press on mobile) any property in the side panel to broadcast/receive values
+The system supports wireless property binding between nodes:
+
+- **Broadcast**: Right-click (or long-press on mobile) any property to broadcast its value
+- **Receive**: Select "Receive" to bind a property to a broadcasting source
+- **Automatic Conversion**: Values are automatically converted between types (boolean→percentage, decimal→percentage)
 - **Visual Feedback**: Bound properties display a link icon indicator
-- **Enhanced Context Menu**:
-  - Property name display in header
-  - Color-coded icons (red for broadcast, green for receive)
-  - Source node label when receiving
-  - Clean separation between actions
+- **Safe Menu Positioning**: Context menus automatically adjust to stay within viewport bounds
 
-### Interaction & Controls
+### Resizable Nodes
 
-- **Multi-Selection**: Select multiple nodes via `Shift + Click`
-- **Clipboard Operations**: Copy (`Ctrl + C`) and Paste (`Ctrl + V`) nodes preserving configuration (excluding connections)
-- **History Management**: Robust Undo (`Ctrl + Z`) and Redo (`Ctrl + Y`) system for all canvas operations
-- **Focus Controls**: Instantly frame selected nodes (`F`) or the entire graph (`Shift + F`)
-- **Quick Access**: Rapidly add nodes via the Node Picker (`Shift + Tab`)
-- **Quick Clone**: `Ctrl + Alt + Drag` from an output port to instantly clone a node with connection
-- **Collapsible Shortcuts**: Shortcut legend panel can be toggled to save screen space
+Nodes can be resized from four corner handles:
 
-### Visuals & Aesthetics
+- **Standard Resize**: Drag any corner
+- **Alt + Drag**: Resize from center (proportional expansion)
 
-- **OLED Theme**: Deep black backgrounds with high-contrast neon accents
-- **Adaptive Grid**: Context-aware grid system (Dots/Lines/Crosshair) with optimized visibility for both Light and Dark modes
-- **Inverse Scaling**: UI elements maintain consistent stroke weights regardless of zoom level
-- **Real-time Visualization**: 60fps canvas-based rendering for Oscillator waveforms
-- **Property Inspector**: Dedicated side panel for editing node properties with context menu support
+### Mobile & Touch Support
+
+- **Device Detection**: UA-based detection (no screen size dependency)
+- **Pinch-to-Zoom**: Two-finger gesture with world-space centering
+- **Tap-to-Connect**: Single tap on ports activates hot wire mode
+- **Long-Press**: Opens context menu (replaces right-click)
+- **Touch-Optimized**: All interactive elements support both mouse and touch events
 
 ## Keyboard Shortcuts
 
-| Action                     | Desktop Shortcut             | Mobile/Touch        |
-| :------------------------- | :--------------------------- | :------------------ |
-| **Pan Canvas**             | Left Drag (Background)       | One-finger drag     |
-| **Zoom**                   | Mouse Wheel                  | Pinch gesture       |
-| **Add to Selection**       | `Shift` + Click              | N/A                 |
-| **Node Picker**            | `Shift` + `Tab`              | N/A                 |
-| **Undo**                   | `Ctrl` + `Z`                 | N/A                 |
-| **Redo**                   | `Ctrl` + `Y`                 | N/A                 |
-| **Copy**                   | `Ctrl` + `C`                 | N/A                 |
-| **Paste**                  | `Ctrl` + `V`                 | N/A                 |
-| **Focus Selected**         | `F`                          | N/A                 |
-| **Focus All**              | `Shift` + `F`                | N/A                 |
-| **Duplicate Node**         | `Alt` + Drag                 | N/A                 |
-| **Quick Clone**            | `Ctrl` + `Alt` + Drag (Port) | N/A                 |
-| **Delete**                 | `Delete` / `Backspace`       | N/A                 |
-| **Disconnect Wire**        | `Alt` + Click Wire           | N/A                 |
-| **Hot Wire Mode**          | `Shift` + Click Port         | Tap Port            |
-| **Property Teleportation** | Right-click Property         | Long-press Property |
-| **Select Node**            | Click Node                   | Tap Node            |
+| Action                 | Desktop                      | Mobile/Touch        |
+| :--------------------- | :--------------------------- | :------------------ |
+| Pan Canvas             | Drag Background              | One-finger drag     |
+| Zoom                   | Mouse Wheel                  | Pinch gesture       |
+| Add to Selection       | `Shift` + Click              | -                   |
+| Node Picker            | `Shift` + `Tab`              | -                   |
+| Undo / Redo            | `Ctrl` + `Z` / `Y`           | -                   |
+| Copy / Paste           | `Ctrl` + `C` / `V`           | -                   |
+| Focus Selected         | `F`                          | -                   |
+| Focus All              | `Shift` + `F`                | -                   |
+| Duplicate Node         | `Alt` + Drag                 | -                   |
+| Quick Clone            | `Ctrl` + `Alt` + Drag (Port) | -                   |
+| Delete                 | `Delete` / `Backspace`       | -                   |
+| Disconnect Wire        | `Alt` + Click Wire           | -                   |
+| Hot Wire Mode          | `Shift` + Click Port         | Tap Port            |
+| Property Teleportation | Right-click Property         | Long-press Property |
 
 ## Technical Stack
 
 - **Framework**: React 19
-- **Styling**: Tailwind CSS
+- **Styling**: Tailwind CSS (tokens override utility classes)
 - **Build Tool**: Vite
 - **Icons**: Lucide React
-- **Rendering**: Hybrid SVG (wires) and HTML5 Canvas (visualizers)
-- **TypeScript**: Full type coverage
+- **Rendering**: Hybrid SVG (wires) + HTML5 Canvas (waveforms)
+- **Animation Ready**: GSAP-compatible timing tokens
+- **State Management Ready**: Tokens designed for Valtio integration
 
 ## Getting Started
 
-1. **Install dependencies**: `npm install`
-2. **Run dev server**: `npm run dev`
-3. **Build**: `npm run build`
+```bash
+# Install dependencies
+npm install
 
-## Future Library Packaging
+# Run development server
+npm run dev
 
-This codebase is structured to be easily packaged as a standalone library:
+# Build for production
+npm run build
+```
 
-- Modular component architecture allows selective imports
-- Custom hooks can be reused in other projects
-- Utility functions are framework-agnostic
-- Clear separation between core logic and presentation
+## Library Integration Guidelines
 
-### Planned as Web App
+This codebase is structured for seamless library packaging:
 
-- iOS/Android deployment via web-based wrapper
-- PWA support for offline usage
-- Native gesture support already implemented
-- Optimized for both desktop and mobile workflows
+1. **Token-First Development**: Always import from `@/src/tokens` instead of using inline values
+2. **Component Purity**: Components receive all styling through tokens and props
+3. **Hook Reusability**: Custom hooks (`usePinchZoom`, `useLongPress`) are framework-agnostic
+4. **Cascading Changes**: Update `src/tokens/*.ts` to affect all consuming components
+
+### Extending the System
+
+**To add a new node type:**
+
+1. Add enum value to `types.ts` → `NodeType`
+2. Add rendering case to `NodeContent.tsx`
+3. Add icon mapping to `BaseNode.tsx` → `getNodeIcon()`
+4. Add label mapping to `BaseNode.tsx` → `getTypeLabel()`
+
+**To add a new color token:**
+
+1. Define in `src/tokens/colors.ts` with `dark`/`light` variants
+2. Export helper function if needed
+3. Re-export from `theme.tokens.ts` if part of semantic theme
+
+**To add a new shortcut:**
+
+1. Add to appropriate category in `src/tokens/shortcuts.ts`
+2. Add handler in `App.tsx` → `handleKeyDown()`
+
+## Roadmap
+
+- PWA offline support
+- iOS/Android web wrapper deployment
+- Additional node types (Gradient, Array, Math)
+- Visual connection type picker
+- Preset system for node configurations

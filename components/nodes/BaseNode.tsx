@@ -11,7 +11,9 @@ import {
   portLayout,
   zIndex,
   iconSizes,
-  animation
+  animation,
+  QualityTier,
+  isFeatureEnabled
 } from '../../src/tokens';
 
 interface BaseNodeProps {
@@ -21,7 +23,11 @@ interface BaseNodeProps {
   accentColor?: string;
   zoom: number;
   isDarkMode: boolean;
-  isHotConnectionSource?: boolean; 
+  isHotConnectionSource?: boolean;
+  // Performance props
+  qualityTier?: QualityTier;
+  disableGlow?: boolean;
+  // Handlers
   onSelect: (id: string) => void;
   onToggleCollapse: (id: string) => void;
   // Generic Port Handlers
@@ -72,6 +78,8 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   zoom,
   isDarkMode,
   isHotConnectionSource,
+  qualityTier = QualityTier.HIGH,
+  disableGlow = false,
   onSelect, 
   onToggleCollapse,
   onPortDown,
@@ -98,13 +106,23 @@ export const BaseNode: React.FC<BaseNodeProps> = ({
   const activeBorderScale = Math.max(activeScaleMin, Math.min(activeScaleMax, 2 / zoom));
   const finalBorderWidth = isSelected ? activeBorderScale : borderScale;
   
-  // Reduced Glow using animation tokens
+  // Performance-aware glow rendering
+  const glowEnabled = !disableGlow && isFeatureEnabled(qualityTier, 'glow');
+  const shadowsEnabled = isFeatureEnabled(qualityTier, 'shadows');
+  
   const { selectedRadius, activeChainRadius } = animation.glow;
-  const shadowStyle = isSelected 
-    ? `0 0 ${selectedRadius / zoom}px ${accentColor}30` 
-    : isActiveChain 
-        ? `0 0 ${activeChainRadius / zoom}px ${accentColor}10` 
-        : (isDarkMode ? '0 4px 6px rgba(0,0,0,0.3)' : '0 4px 6px rgba(0,0,0,0.1)');
+  
+  // Determine shadow style based on quality tier
+  let shadowStyle: string;
+  if (glowEnabled && isSelected) {
+    shadowStyle = `0 0 ${selectedRadius / zoom}px ${accentColor}30`;
+  } else if (glowEnabled && isActiveChain) {
+    shadowStyle = `0 0 ${activeChainRadius / zoom}px ${accentColor}10`;
+  } else if (shadowsEnabled) {
+    shadowStyle = isDarkMode ? '0 4px 6px rgba(0,0,0,0.3)' : '0 4px 6px rgba(0,0,0,0.1)';
+  } else {
+    shadowStyle = 'none'; // MINIMAL tier: no shadows at all
+  }
 
   // Clone Animation
   const animationClass = data.type === NodeType.CLONE ? 'animate-in fade-in zoom-in duration-300' : '';

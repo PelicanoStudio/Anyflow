@@ -12,6 +12,17 @@ export * as colors from './colors';
 export * as layout from './layout';
 export * as animation from './animation';
 export * as shortcutsModule from './shortcuts';
+export * as spacingModule from './spacing';
+export * as responsiveModule from './responsive';
+export * as performanceModule from './performance';
+
+// Engine contract (for animation engine integration)
+export {
+  getEngineUIConfig,
+  defaultPerformanceHints,
+  type EngineUIConfig,
+  type EnginePerformanceHints,
+} from './engine.contract';
 
 // Commonly used direct exports
 export { 
@@ -56,3 +67,40 @@ export {
   getConnectionTypeOptions,
 } from './connections';
 
+// Spacing exports
+export {
+  spacing,
+  semanticSpacing,
+  nodeSpacing,
+  baseUnit,
+  getSpacing,
+  getSemanticSpacing,
+  calcSpacing,
+} from './spacing';
+
+// Responsive exports
+export {
+  breakpoints,
+  minWidth,
+  maxWidth,
+  between,
+  matchesBreakpoint,
+  getCurrentBreakpoint,
+  responsiveValue,
+  canvasResponsive,
+} from './responsive';
+
+// Performance exports
+export {
+  QualityTier,
+  qualityFeatures,
+  lodThresholds,
+  visualizerThrottle,
+  wireSimplification,
+  nodeRenderThresholds,
+  getQualityFeatures,
+  isFeatureEnabled,
+  getLodLevel,
+  getRecommendedTier,
+  getVisualizerInterval,
+} from './performance';
